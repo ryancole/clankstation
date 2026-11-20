@@ -59,7 +59,7 @@ broad permissions inside their environment.
 |  Host OS (NixOS)                                             |
 |   - project storage (bare git mirrors, worktrees)           |
 |   - environment launchers: Docker, libvirt/QEMU             |
-|   - per-user harness volumes                                |
+|   - per-user home volumes (harness installs + sign-in)      |
 |   - mDNS, SSH, firewall, storage, cleanup timers            |
 +-----------------------------+-------------------------------+
 |  Linux task container       |  Windows task VM              |
@@ -141,7 +141,8 @@ Directory tree, created with `systemd.tmpfiles`:
     events.jsonl              raw harness event stream
     result/                   final summary, diff, metadata
   users/<user>/
-    claude/                   harness volume: CLAUDE_CONFIG_DIR + native install
+    home/                     per-user home volume, mounted as /home/agent in every
+                              environment (harness installs, sign-in, caches)
   docker/                     Docker data-root
   vm/
     base/<template>.qcow2     prepared Windows base images (read-only once built)
@@ -183,8 +184,8 @@ bare-metal instances or the newer types that allow nested virtualization.
   so it retries every minute until it succeeds and never holds up boot.
 - **devcontainer.json**: when a repo has one, build and start the environment
   with the devcontainers CLI (latest release), then add Clankstation's mounts.
-- Mounts per task: the task worktree at `/workspace`, and the user's harness
-  volume (5.7).
+- Mounts per task: the task worktree at `/workspace`, and the user's home
+  volume at `/home/agent` (5.7).
 - One container per task, removed when the task ends. The worktree and results
   stay on the host.
 
@@ -219,7 +220,7 @@ bare-metal instances or the newer types that allow nested virtualization.
   only). The VM clones the task branch onto its own NTFS disk, and pushes the
   result branch back when the task finishes. Why not a share: MSBuild and other
   Windows build tools are slow over SMB/virtiofs, and file watchers and long paths
-  break. Small, low-I/O data (the harness volume) does use virtiofs.
+  break. Small, low-I/O data (harness config) does use virtiofs.
 
 ### 5.7 Harness integration
 
@@ -237,15 +238,24 @@ Hard rules (from the brief, non-negotiable):
 
 How this works for Claude Code:
 
-- **Per-user harness volume** `users/<user>/claude/` is mounted into every
-  environment, with `CLAUDE_CONFIG_DIR` pointing at it, so the user signs in
-  once, not once per task. Clankstation mounts the directory and never reads
-  its contents.
-- **Install:** opting in runs the official native installer into the volume.
-  That gives the latest release, and Claude Code's own auto-update keeps it
-  there. Windows VMs reach the volume over virtiofs. If that turns out to be
-  unreliable for running the binary, the base image gets a native install and
-  only the config directory is shared.
+- **Per-user home volume** `users/<user>/home/` (owned by `clankstation`, mode
+  0700) is mounted as `/home/agent` in every Linux environment, so the user
+  signs in once, not once per task. Clankstation mounts the directory and
+  never reads its contents. It is a whole home directory, not just a
+  `CLAUDE_CONFIG_DIR`, because the native installer and its auto-updater
+  spread files across `~/.local/{bin,share,state}`, `~/.cache` and `~/.claude`
+  and move files between them. Separate bind mounts would break those moves
+  (a rename across mount points fails). Shared caches and dotfiles across a
+  user's tasks are an accepted side effect.
+- **Install:** `clankctl harness enable claude` runs the official native
+  installer (`https://claude.ai/install.sh`) inside a container, into the home
+  volume. That gives the latest release, and Claude Code's own auto-update
+  keeps it there. Sign-in: `clankctl login claude` runs `claude auth login`
+  (the vendor's flow) in a container. `clankctl harness status` shows
+  `claude auth status`.
+- **Windows VMs** need their own design here (M8). One home volume can't be
+  shared with Windows as-is, so the likely shape is a native install in the
+  base image plus a per-user config directory over virtiofs.
 - **Headless run:** `claude -p "<prompt>" --output-format stream-json --verbose`
   with permissions bypassed inside the environment (the environment is the
   sandbox). Events go to `tasks/<id>/events.jsonl`.
@@ -264,8 +274,10 @@ us to a language before the web stack decision.
 
 ```
 clankctl project add <name> <git-url> [--template linux-default|<windows-template>]
-clankctl harness enable claude          # opt-in install into the user's volume
-clankctl login claude                   # interactive shell to run /login
+clankctl harness enable claude          # opt-in install into the user's home volume
+clankctl harness status                 # installed version + `claude auth status`
+clankctl login claude                   # vendor sign-in (`claude auth login`)
+clankctl shell [cmd...]                 # shell in the default image with the home volume
 clankctl run <project> "<prompt>"       # create task, start env, run headless
 clankctl status [<task-id>]
 clankctl attach <task-id>               # live terminal in the task environment
@@ -321,7 +333,7 @@ Each milestone ends with a check in the VM.
 | M0 | Flake skeleton in `src/`, pinned nixpkgs, host config, `dev-vm` | build-vm boots; SSH works; `clankstation.local` resolves from the LAN side |
 | M1 | Storage: disko layout, data tree, tmpfiles | In the VM, the data disk is XFS at `/var/lib/clankstation` with the expected tree |
 | M2 | Docker plus the default Linux image | `docker run` of the default image works with a worktree bind mount |
-| M3 | Harness volume: opt-in Claude Code install and one-time sign-in | After `/login` once, a fresh container is already signed in |
+| M3 | Home volume: opt-in Claude Code install and one-time sign-in | After `/login` once, a fresh container is already signed in |
 | M4 | First end-to-end task via `clankctl run` | A prompt runs headless in a container, survives SSH disconnect, and leaves a summary and a diff |
 | M5 | Take over and resume: `clankctl attach`, `clankctl resume` | Can attach to a running task, and continue a finished one |
 | M6 | devcontainer.json support | A repo with a devcontainer gets its own environment |
@@ -347,8 +359,8 @@ format, how needs-input tasks are shown and answered.
 - Code transfer to Windows VMs: confirm git sync at M8.
 - Windows licensing: how an unactivated or evaluation install is handled when
   no key is given.
-- Whether running the Claude Code binary from a virtiofs share works well on
-  Windows, or whether it needs a native install in the base image.
+- How harness install and sign-in work in Windows VMs (5.7), given that the
+  Linux home volume can't simply be shared.
 - Retention defaults for finished tasks and overlays.
 - Upgrade disko when a release newer than v1.13.0 ships. That release should
   have the test-driver fix (then drop the `machine.shutdown()` workaround in

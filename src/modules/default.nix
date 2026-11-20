@@ -5,5 +5,6 @@
     ./storage.nix
     ./service-user.nix
     ./docker.nix
+    ./clankctl.nix
   ];
 }

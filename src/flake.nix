@@ -52,6 +52,7 @@
       checks.${system} = {
         m0-boot = import ./tests/m0-boot.nix { inherit self pkgs; };
         m2-docker = import ./tests/m2-docker.nix { inherit self pkgs; };
+        m3-harness = import ./tests/m3-harness.nix { inherit self pkgs; };
       }
       // import ./tests/m1-storage.nix { inherit self pkgs disko; };
 
