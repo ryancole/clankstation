@@ -61,8 +61,11 @@ let
       disko-config = {
         disko.devices = host.config.disko.devices;
       };
-      # disko v1.13.0 registers the rebooted VM in a list the nixos-26.05 test
-      # driver no longer cleans up, so the build hangs unless we stop it here.
+      # Workaround: disko v1.13.0 adds the rebooted VM with
+      # driver.machines.append(), but in the nixos-26.05 driver `machines` is
+      # a property returning a fresh list, so cleanup never sees the VM and
+      # the build hangs. Fixed on disko master (driver.machines_qemu.append);
+      # remove this once we move to a disko release newer than v1.13.0.
       extraTestScript = checks + extraTestScript + ''
         machine.shutdown()
       '';

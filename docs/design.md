@@ -334,5 +334,8 @@ format, how needs-input tasks are shown and answered.
 - Whether running the Claude Code binary from a virtiofs share works well on
   Windows, or whether it needs a native install in the base image.
 - Retention defaults for finished tasks and overlays.
+- Upgrade disko when a release newer than v1.13.0 ships. That release should
+  have the test-driver fix (then drop the `machine.shutdown()` workaround in
+  `src/tests/m1-storage.nix`) and the changes needed for NixOS 26.11.
 - Later: macOS workers, a separate Windows PC as a worker, multiple users,
   Tailscale.
