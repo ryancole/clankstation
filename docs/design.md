@@ -163,11 +163,24 @@ bare-metal instances or the newer types that allow nested virtualization.
 
 ### 5.4 Linux environments (Docker)
 
-- `virtualisation.docker.enable`, with the package left at the default
-  (`docker_29`) and `data-root` on the data disk.
-- **Default image** (`src/images/linux-default`): based on the latest Ubuntu LTS
-  (26.04), with git, common build tools, and a non-root `agent` user with
-  passwordless sudo. No harness is baked in.
+- `virtualisation.docker.enable` (`src/modules/docker.nix`), with the package
+  left at the default (`docker_29`), overlay2, and `data-root` at
+  `/var/lib/clankstation/docker` on the data disk. `live-restore` (the
+  default) keeps task containers running while dockerd restarts. Container
+  logs are rotated, and a weekly prune removes stopped containers and dangling
+  images.
+- **Service user:** the host user `clankstation` (uid/gid 2000, in the `docker`
+  group) owns `projects/`, `tasks/`, `users/` and `cache/`. In containers the
+  `agent` user has the same uid/gid, so bind-mounted worktrees have one owner
+  on both sides.
+- **Default image** (`src/images/linux-default/Dockerfile`): `FROM ubuntu:26.04`
+  (the latest Ubuntu LTS; the floating tag picks up point releases), with git,
+  build-essential, python3, curl, ripgrep, tmux and similar, plus `agent` with
+  passwordless sudo. No harness is baked in. A systemd timer
+  (`clankstation-image-linux-default`, 30 s after boot, then daily) builds it
+  when it's missing, tagged by a hash of the Dockerfile and uid/gid plus
+  `:latest`, so a changed Dockerfile gets rebuilt. It needs network access,
+  so it retries every minute until it succeeds and never holds up boot.
 - **devcontainer.json**: when a repo has one, build and start the environment
   with the devcontainers CLI (latest release), then add Clankstation's mounts.
 - Mounts per task: the task worktree at `/workspace`, and the user's harness
@@ -283,7 +296,10 @@ the SSH session that started them disconnects.
 - NixOS VM tests in `src/tests/` for automated checks, run by `nix flake check`.
   `m0-boot` covers SSH and mDNS between two nodes. `m1-storage-*` uses disko's
   test helper to format blank disks, install the system, boot it, and check
-  both layouts.
+  both layouts. `m2-docker` checks the Docker data-root on XFS and a
+  uid-matched worktree bind mount. VM tests have no network, so it uses a
+  digest-pinned `ubuntu:26.04` (`src/images/linux-default/base-image.nix`),
+  and the full image build is checked in the dev VM.
 - Windows VM milestones need real hardware, or libvirt running directly in WSL.
   Windows inside build-vm inside WSL is too many layers of nesting to be usable.
 

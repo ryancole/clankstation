@@ -122,26 +122,31 @@ in
 
     boot.supportedFilesystems = [ "xfs" ];
 
-    # The data tree. Ownership moves to a service user with the service layer.
+    # The data tree. Work data belongs to the `clankstation` service user
+    # (modules/service-user.nix); VM images stay root-owned for libvirt.
     systemd.tmpfiles.settings."10-clankstation" =
-      lib.genAttrs
-        (map (d: "${dataRoot}/${d}") [
-          "projects"
-          "tasks"
-          "users"
-          "vm"
-          "vm/base"
-          "vm/overlays"
-          "vm/tools"
-          "vm/iso"
-          "cache"
-        ])
-        (_: {
+      let
+        dir = owner: {
           d = {
             mode = "0755";
-            user = "root";
-            group = "root";
+            user = owner;
+            group = owner;
           };
-        });
+        };
+        under = owner: dirs: lib.genAttrs (map (d: "${dataRoot}/${d}") dirs) (_: dir owner);
+      in
+      under "clankstation" [
+        "projects"
+        "tasks"
+        "users"
+        "cache"
+      ]
+      // under "root" [
+        "vm"
+        "vm/base"
+        "vm/overlays"
+        "vm/tools"
+        "vm/iso"
+      ];
   };
 }
