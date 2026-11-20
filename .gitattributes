@@ -1,0 +1,2 @@
+# Keep LF everywhere: these files are built and run on Linux and in task environments.
+* text=auto eol=lf

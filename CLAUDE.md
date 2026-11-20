@@ -50,11 +50,16 @@ credential brokers. Agents get broad permissions inside their environment.
 ## Building and testing
 
 Development is on Windows 11. Nix runs in the WSL distro `NixOS`, which has KVM.
-Run Nix commands there, for example:
+That distro has no `git` on its PATH, and Nix needs it for a flake inside a git
+repo, so wrap commands in `nix shell ...#git`. From the repo root in WSL
+(`/mnt/c/Users/Ryan/Documents/code/clankstation`):
 
 ```
-wsl -d NixOS -- nix build ./src#nixosConfigurations.dev-vm.config.system.build.vm
-wsl -d NixOS -- nix flake check ./src
+export NIX_CONFIG="experimental-features = nix-command flakes"
+nix shell nixpkgs/nixos-26.05#git -c nix flake check ./src      # eval + VM tests
+nix shell nixpkgs/nixos-26.05#git -c nix build ./src#nixosConfigurations.dev-vm.config.system.build.vm
+NIX_DISK_IMAGE=/tmp/clank-dev.qcow2 ./result/bin/run-clankstation-vm
+ssh -p 2222 admin@localhost                                       # dev VM only: password admin
 ```
 
 - Flakes only see git-tracked files. `git add` (or `git add -N`) new files
