@@ -1,5 +1,5 @@
 # The appliance on real x86_64 hardware.
-{ modulesPath, ... }:
+{ lib, modulesPath, ... }:
 {
   imports = [ (modulesPath + "/installer/scan/not-detected.nix") ];
 
@@ -14,16 +14,7 @@
     cpu.amd.updateMicrocode = true;
   };
 
-  # Placeholder until the disko layout lands in M1.
-  fileSystems = {
-    "/" = {
-      device = "/dev/disk/by-label/clank-root";
-      fsType = "ext4";
-    };
-    "/boot" = {
-      device = "/dev/disk/by-label/CLANK-ESP";
-      fsType = "vfat";
-      options = [ "umask=0077" ];
-    };
-  };
+  # Only used when disko formats the disks. The installer (M9) sets the real
+  # disk(s); after install, filesystems are mounted by partition label.
+  clankstation.storage.bootDisk = lib.mkDefault "/dev/nvme0n1";
 }

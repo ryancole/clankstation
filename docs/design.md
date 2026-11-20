@@ -41,7 +41,7 @@ broad permissions inside their environment.
 | Kernel | `linuxPackages_latest` (latest stable kernel, per principle 2). One line to revert to the default LTS kernel | Settled (by principle) |
 | Linux environments | Docker (rootful, `virtualisation.docker`, Docker 29.x) | Settled |
 | Windows environments | QEMU/KVM through libvirt, with a copy-on-write qcow2 overlay per task on a prepared base image | Settled (from brief) |
-| Disk layout | ext4 root for NixOS; all Clankstation state on an XFS data partition or disk at `/var/lib/clankstation`; partitioned with disko | Settled |
+| Disk layout | ext4 root for NixOS; all Clankstation state on an XFS data partition or disk at `/var/lib/clankstation`; partitioned with disko (v1.13.0) | Settled, built in M1 |
 | Source location | All source under `src/`; the repo root holds only top-level files | Settled |
 | Default branch | `master` | Settled |
 | Access | LAN only, `clankstation.local` via Avahi/mDNS. Tailscale optional later | Settled (from brief) |
@@ -95,8 +95,8 @@ launches environments, moves code in and out, and collects output.
     tests/              NixOS VM tests (run by `nix flake check`)
 ```
 
-Flake inputs: `nixpkgs` (`nixos-26.05`) and `disko` (latest release tag). Add
-others only when needed.
+Flake inputs: `nixpkgs` (`nixos-26.05`) and `disko` (`v1.13.0`, its latest
+release tag; follows our nixpkgs). Add others only when needed.
 
 Flakes only see git-tracked files. New files must be `git add`ed (or
 `git add -N`) before a build will see them.
@@ -116,11 +116,17 @@ Flakes only see git-tracked files. New files must be `git add`ed (or
 
 ### 5.3 Storage layout
 
-Partitioning with disko:
+Partitioning with disko (`src/modules/storage.nix`, options under
+`clankstation.storage`):
 
-- ESP (FAT32, 1 GiB) and root (ext4) on the boot disk.
-- Data: XFS, mounted at `/var/lib/clankstation`. It is a second disk when there
-  is one, or the rest of the boot disk otherwise. XFS is chosen for reflinks:
+- ESP (FAT32, 1 GiB, label `CLANK-ESP`) and root (ext4, label `clank-root`) on
+  the boot disk (`bootDisk`).
+- Data: XFS (label `clank-data`, `noatime`), mounted at `/var/lib/clankstation`.
+  It is a second disk when `dataDisk` is set, which is the recommended setup
+  (root then fills the boot disk). Otherwise it is the rest of the boot disk,
+  after a 64 GiB root (`rootSize`).
+- Filesystems mount by GPT partition label, so disk device paths only matter
+  when the installer formats the disks. XFS is chosen for reflinks:
   copying base images and large SDKs is close to free. Docker's
   overlay2 driver needs `ftype=1`, which is the mkfs.xfs default.
 
@@ -271,9 +277,13 @@ the SSH session that started them disconnects.
 
 - Development happens on Windows 11 with Nix in the `NixOS` WSL distro, which
   has KVM.
-- `nixos-rebuild build-vm` (the `dev-vm` host) for manual checks. An empty disk
-  image (`virtualisation.emptyDiskImages`) stands in for the data disk.
+- The `dev-vm` host for manual checks, built as disko's `vmWithDisko`. It boots
+  from fresh disk images formatted with the real layout (16 GiB boot disk,
+  20 GiB data disk).
 - NixOS VM tests in `src/tests/` for automated checks, run by `nix flake check`.
+  `m0-boot` covers SSH and mDNS between two nodes. `m1-storage-*` uses disko's
+  test helper to format blank disks, install the system, boot it, and check
+  both layouts.
 - Windows VM milestones need real hardware, or libvirt running directly in WSL.
   Windows inside build-vm inside WSL is too many layers of nesting to be usable.
 

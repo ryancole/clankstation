@@ -1,12 +1,22 @@
-# build-vm settings for local testing. These apply only to the VM variant
-# (config.system.build.vm), never to the appliance itself.
+# Dev VM for local testing. Build and run with:
+#   nix build ./src#nixosConfigurations.dev-vm.config.system.build.vmWithDisko
+#   ./result/bin/disko-vm
+# The VM boots from disks formatted with the real disko layout (two-disk:
+# boot disk + XFS data disk). These settings apply only to the VM, never to
+# the appliance itself.
 { lib, ... }:
 {
-  virtualisation.vmVariant = {
+  clankstation.storage.dataDisk = "/dev/vdb";
+
+  virtualisation.vmVariantWithDisko = {
+    disko.devices.disk = {
+      main.imageSize = "16G";
+      data.imageSize = "20G";
+    };
+
     virtualisation = {
       memorySize = 4096;
       cores = 4;
-      diskSize = 20 * 1024;
       graphics = false;
       # SSH from the WSL side: ssh -p 2222 admin@localhost
       forwardPorts = [

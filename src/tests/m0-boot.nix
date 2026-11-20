@@ -10,6 +10,8 @@ pkgs.testers.runNixOSTest {
         self.nixosModules.default
         ../hosts/clankstation
       ];
+      # The test VM brings its own root disk; the disko layout is covered by m1-storage.
+      disko.enableConfig = false;
     };
 
     client =

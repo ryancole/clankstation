@@ -57,10 +57,16 @@ repo, so wrap commands in `nix shell ...#git`. From the repo root in WSL
 ```
 export NIX_CONFIG="experimental-features = nix-command flakes"
 nix shell nixpkgs/nixos-26.05#git -c nix flake check ./src      # eval + VM tests
-nix shell nixpkgs/nixos-26.05#git -c nix build ./src#nixosConfigurations.dev-vm.config.system.build.vm
-NIX_DISK_IMAGE=/tmp/clank-dev.qcow2 ./result/bin/run-clankstation-vm
+nix shell nixpkgs/nixos-26.05#git -c nix build ./src#nixosConfigurations.dev-vm.config.system.build.vmWithDisko
+./result/bin/disko-vm                                             # boots from fresh disko-formatted disks
 ssh -p 2222 admin@localhost                                       # dev VM only: password admin
 ```
+
+- The dev VM uses disko's `vmWithDisko`, not plain `build-vm`. The disko layout
+  mounts the data disk by partition label, and plain `build-vm` has no such
+  disk, so boot would hang waiting for it.
+- disko-based VM tests (`src/tests/m1-storage.nix`) must end with
+  `machine.shutdown()`, or the build hangs after the test passes.
 
 - Flakes only see git-tracked files. `git add` (or `git add -N`) new files
   before building.
