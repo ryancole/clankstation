@@ -4,12 +4,14 @@ A slim NixOS-based OS for an always-on home box where AI coding agents run
 tasks unattended. Read `docs/design.md` before making changes. It holds the
 architecture, the decisions table and the milestones.
 
-## Current phase: OS first
+## Current phase
 
-Build the operating system layer (flake, host config, storage, Docker, libvirt,
-harness volumes, `clankctl`, installer). Do not start the web GUI, API, task
-queue or event protocol until the OS milestones are done and the user picks the
-web stack.
+OS milestones M0–M8 are done (see the milestones table in `docs/design.md`).
+Windows tasks (M9) are **shelved** by the user until the box gets more RAM and
+storage; don't work on Windows unless asked. M10 (cleanup timers, updates) is
+still open. Next is the service layer (web GUI, API, task queue, worker event
+protocol), starting with the web stack decision, which is the user's to make.
+Develop and test it on the WSL dev VM.
 
 ## Repo layout
 

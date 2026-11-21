@@ -471,8 +471,8 @@ Each milestone ends with a check in the VM.
 | M5 | Take over and resume: `clankctl attach`, `clankctl resume` | Can attach to a running task, and continue a finished one |
 | M6 | devcontainer.json support | A repo with a devcontainer gets its own environment |
 | M7 | Installer ISO (moved up from M9 so the Windows milestones can run on real hardware) | The ISO installs offline in a VM test, and on the real box: it boots and takes SSH with the installed key. Done: also installed on a Hyper-V Gen 2 VM (two disks, nested virtualization, `/dev/kvm` present) |
-| M8 | libvirt and unattended Windows base image | A base image builds from a user ISO with no clicks (real hardware) |
-| M9 | Windows tasks: overlays, git sync, harness | M4's check passes against a Windows template |
+| M8 | libvirt and unattended Windows base image | A base image builds from a user ISO with no clicks (real hardware). Done: Windows 11 Pro + VS 2026 Build Tools built unattended on the Hyper-V box |
+| M9 | Windows tasks: overlays, git sync, harness. **Shelved** (2026-11-21) until the box's RAM/storage upgrade; first step when resumed: a Windows Server 2025 Core base image that just boots and takes SSH | M4's check passes against a Windows template |
 | M10 | Cleanup timers and updates | Old tasks and overlays get pruned; the box updates from this repo |
 
 M4 is the brief's first milestone ("send a prompt and come back to a finished
