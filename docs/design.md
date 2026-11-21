@@ -405,6 +405,9 @@ layer.
   installed key.
 - Windows VM milestones need real hardware, or libvirt running directly in WSL.
   Windows inside build-vm inside WSL is too many layers of nesting to be usable.
+  A Hyper-V Gen 2 VM with nested virtualization works as a stand-in box:
+  Secure Boot off, static memory, DVD first in the boot order. The appliance
+  and ISO load `hv_storvsc` early in boot for its disks.
 
 ## 6. Harness adapter (for later harnesses)
 
@@ -428,7 +431,7 @@ Each milestone ends with a check in the VM.
 | M4 | First end-to-end task via `clankctl run` | A prompt runs headless in a container, survives SSH disconnect, and leaves a summary and a diff |
 | M5 | Take over and resume: `clankctl attach`, `clankctl resume` | Can attach to a running task, and continue a finished one |
 | M6 | devcontainer.json support | A repo with a devcontainer gets its own environment |
-| M7 | Installer ISO (moved up from M9 so the Windows milestones can run on real hardware) | The ISO installs offline in a VM test, and on the real box: it boots and takes SSH with the installed key |
+| M7 | Installer ISO (moved up from M9 so the Windows milestones can run on real hardware) | The ISO installs offline in a VM test, and on the real box: it boots and takes SSH with the installed key. Done: also installed on a Hyper-V Gen 2 VM (two disks, nested virtualization, `/dev/kvm` present) |
 | M8 | libvirt and unattended Windows base image | A base image builds from a user ISO with no clicks (real hardware) |
 | M9 | Windows tasks: overlays, git sync, harness | M4's check passes against a Windows template |
 | M10 | Cleanup timers and updates | Old tasks and overlays get pruned; the box updates from this repo |
