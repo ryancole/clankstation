@@ -139,10 +139,11 @@ Directory tree, created with `systemd.tmpfiles`:
     project.env               url=, template=
   tasks/<task-id>/            task id: t-YYYYMMDD-HHMMSS-xxxx
     task.env                  project, branch, base, created, user
-    prompt.txt, base          inputs for the in-container runner
+    prompt.txt, base, resume  inputs for the in-container runner (current turn)
+    prompts.log               every turn: run / resume / attach, with its prompt
     worktree/                 the task's own local clone, on branch clank/<task-id>
-    events.jsonl, stderr.log  raw harness stream-json events and stderr
-    status.json               state (done/failed), exit code, session id, times
+    events.jsonl, stderr.log  raw harness stream-json events and stderr (all turns)
+    status.json               state (done/failed/stopped), mode, exit code, session id, times
     result/                   summary.md, diff.patch, diffstat.txt
   users/<user>/
     home/                     per-user home volume, mounted as /home/agent in every
@@ -274,11 +275,23 @@ How this works for Claude Code:
   the harness, then writes the summary (the final `result` event), the session
   id (the `init` event), the diff and `status.json`. It is the first, shell-only
   form of the per-environment worker. Events go to `tasks/<id>/events.jsonl`.
-- **Keep going / answer a question:** a new headless run with
-  `--resume <session-id>` in the same environment and worktree.
-- **Take over:** start `claude --resume <session-id>` interactively in a
-  terminal inside the environment (tmux in containers, a ConPTY session over SSH
-  in Windows VMs).
+- **Keep going / answer a question:** `clankctl resume <task> "<reply>"` starts
+  a new headless turn with `--resume <session-id>` on the same worktree. Events
+  are appended, the summary is that turn's result, and the diff stays
+  cumulative against the original base. Every turn's prompt goes to
+  `prompts.log`.
+- **Watch:** `clankctl logs [-f]` renders the event stream (assistant text,
+  tool calls, results). `clankctl shell --task` opens a shell in the running
+  container, or in a fresh one on the worktree.
+- **Stop:** `clankctl stop` runs `docker stop` (containers use `--init` and a
+  30 s stop timeout). The runner passes SIGTERM to the harness and still writes
+  the diff and a `stopped` status, so a stopped task can be resumed.
+- **Take over:** `clankctl attach` runs `claude --resume <session-id>`
+  interactively in a new container on the task's worktree, in your terminal.
+  A running headless turn is stopped first, after a confirmation prompt or
+  `--yes`. The harness is never driven by two processes at once. On exit the
+  diff is refreshed and the task is handed back (`mode: interactive` in
+  `status.json`). Windows VMs will use a ConPTY session over SSH (M8).
 
 ### 5.8 clankctl (OS-phase admin CLI)
 
@@ -295,12 +308,15 @@ clankctl harness status                 # installed version + `claude auth statu
 clankctl login claude                   # vendor sign-in (`claude auth login`)
 clankctl shell [cmd...]                 # shell in the default image with the home volume
 clankctl run <project> "<prompt>"       # create task, start env, run headless
-clankctl status                         # all tasks: running / done / failed / lost
+clankctl status                         # all tasks: running / done / failed / stopped / lost
 clankctl show <task-id>                 # prompt, state, session, summary, diffstat
-clankctl attach <task-id>               # live terminal in the task environment
 clankctl diff <task-id>
-clankctl resume <task-id> "<prompt>"
-clankctl clean [--older-than 7d]
+clankctl logs <task-id> [-f]            # what the agent did; -f follows a running task
+clankctl resume <task-id> "<prompt>"    # keep going in the same session
+clankctl attach [--yes] <task-id>       # take over interactively
+clankctl stop <task-id>
+clankctl shell --task <task-id> [cmd]   # shell in the task's environment
+clankctl clean [--older-than 7d]        # M9
 ```
 
 Task containers are started detached (`docker run --detach --rm`), so dockerd

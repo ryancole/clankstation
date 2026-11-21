@@ -25,6 +25,11 @@ Tasks:
   status                         List tasks and their state
   show <task-id>                 Prompt, state, summary and diffstat of a task
   diff <task-id>                 The task's diff against its base commit
+  logs <task-id> [-f]            What the agent did (-f: follow a running task)
+  resume <task-id> <prompt>      Keep going: a new headless turn in the same session
+  attach [--yes] <task-id>       Take over in an interactive Claude Code terminal
+                                 (a running task's headless run is stopped first)
+  stop <task-id>                 Stop a running task (keeps its results so far)
 
 Harness (per-user, opt-in):
   harness enable claude          Install Claude Code into your home volume (official installer)
@@ -34,6 +39,9 @@ Harness (per-user, opt-in):
 Environments:
   shell [cmd...]                 Open a shell (or run cmd) in the default Linux image
                                  with your home volume mounted
+  shell --task <task-id> [cmd...]
+                                 The same, inside a task's environment (its running
+                                 container, or a new one on its worktree)
 
 Environment variables:
   CLANK_USER                     Household user whose home volume to use (default: default)
@@ -147,6 +155,11 @@ cmd_login() {
 }
 
 cmd_shell() {
+  if [ "${1:-}" = --task ]; then
+    shift
+    task_shell "$@"
+    return
+  fi
   init_home
   if [ "$#" -eq 0 ]; then
     env_run -- bash -l
@@ -210,21 +223,61 @@ task_state() {
   fi
 }
 
-# Start the task container. Detached and owned by dockerd, so it keeps
-# running after the SSH session (and clankctl) exit.
-start_task() {
-  local id="$1" t="$tasks/$1" common
-  mapfile -t common < <(container_opts)
-  docker run --detach --rm \
-    --name "clank-$id" \
+# A task always uses the home volume (and so the sign-in and harness
+# sessions) of the user who created it.
+use_task_user() {
+  local user
+  user=$(kv "$tasks/$1/task.env" user)
+  valid_name "$user" || die "task $1 has no valid user"
+  home_volume="$CLANK_DATA/users/$user/home"
+}
+
+# docker run options for a task's environment. The container name defaults
+# to the task's own (clank-<id>), which is what marks a task as running.
+task_container_opts() {
+  local id="$1" t="$tasks/$1" name="${2:-clank-$1}"
+  container_opts
+  printf '%s\n' \
+    --init \
+    --stop-timeout 30 \
+    --name "$name" \
     --label "clankstation.task=$id" \
     --label "clankstation.project=$(kv "$t/task.env" project)" \
-    "${common[@]}" \
     --volume "$t:/clank" \
     --volume "$t/worktree:/workspace" \
     --volume "$CLANK_TASK_RUN:/opt/clankstation/task-run:ro" \
-    --workdir /workspace \
-    "$CLANK_IMAGE" bash /opt/clankstation/task-run >/dev/null
+    --workdir /workspace
+}
+
+# Start a headless turn. Detached and owned by dockerd, so it keeps running
+# after the SSH session (and clankctl) exit.
+start_task() {
+  local id="$1" opts
+  use_task_user "$id"
+  mapfile -t opts < <(task_container_opts "$id")
+  docker run --detach --rm "${opts[@]}" "$CLANK_IMAGE" \
+    bash /opt/clankstation/task-run headless >/dev/null
+}
+
+# Record each turn's prompt, so a task's history survives later turns.
+log_turn() {
+  local t="$tasks/$1"
+  {
+    printf -- '--- %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2"
+    if [ -n "${3:-}" ]; then printf '%s\n' "$3"; fi
+  } >>"$t/prompts.log"
+}
+
+require_not_running() {
+  [ "$(task_state "$1")" != running ] ||
+    die "task $1 is still running (see: clankctl logs -f $1, or clankctl attach $1)"
+}
+
+session_of() {
+  local t="$tasks/$1" sid=""
+  if [ -f "$t/status.json" ]; then sid=$(jq -r '.session_id // ""' "$t/status.json"); fi
+  [ -n "$sid" ] || die "task $1 has no harness session to continue"
+  printf '%s' "$sid"
 }
 
 cmd_run() {
@@ -253,6 +306,8 @@ cmd_run() {
   mkdir -p "$t"
   printf '%s\n' "$prompt" >"$t/prompt.txt"
   printf '%s\n' "$base" >"$t/base"
+  : >"$t/resume"
+  log_turn "$id" run "$prompt"
   printf 'project=%s\nbranch=%s\nbase=%s\ncreated=%s\nuser=%s\n' \
     "$name" "$branch" "$base" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$CLANK_USER" >"$t/task.env"
 
@@ -315,7 +370,123 @@ cmd_diff() {
   fi
 }
 
+cmd_resume() {
+  local id="${1:-}" prompt="${2:-}" t sid
+  [ -n "$id" ] && [ -n "$prompt" ] || die "usage: clankctl resume <task-id> <prompt>"
+  t=$(task_dir "$id")
+  require_not_running "$id"
+  sid=$(session_of "$id")
+  if [ "$prompt" = - ]; then prompt=$(cat); fi
+  require_image
+  printf '%s\n' "$prompt" >"$t/prompt.txt"
+  printf '%s\n' "$sid" >"$t/resume"
+  rm -f "$t/status.json"
+  log_turn "$id" resume "$prompt"
+  start_task "$id"
+  echo "Resumed $id (session $sid)." >&2
+}
+
+cmd_stop() {
+  local id="${1:-}"
+  [ -n "$id" ] || die "usage: clankctl stop <task-id>"
+  task_dir "$id" >/dev/null
+  [ "$(task_state "$id")" = running ] || die "task $id is not running"
+  echo "Stopping $id (the agent gets up to 30s to finish its current step)..." >&2
+  docker stop "clank-$id" >/dev/null
+  # The runner writes status.json on its way out; --rm removes the container.
+  local _
+  for _ in $(seq 1 20); do
+    [ -f "$tasks/$id/status.json" ] && break
+    sleep 0.5
+  done
+  echo "$id: $(task_state "$id")"
+}
+
+cmd_attach() {
+  local yes=false
+  if [ "${1:-}" = --yes ]; then yes=true; shift; fi
+  local id="${1:-}" t opts tty=(-i)
+  [ -n "$id" ] || die "usage: clankctl attach [--yes] <task-id>"
+  t=$(task_dir "$id")
+  if [ "$(task_state "$id")" = running ]; then
+    if [ "$yes" != true ]; then
+      [ -t 0 ] || die "task $id is running; pass --yes to stop its headless run and take over"
+      local answer
+      read -r -p "Task $id is running headless. Stop it and take over interactively? [y/N] " answer
+      case "$answer" in y | Y | yes) ;; *) die "not attached" ;; esac
+    fi
+    cmd_stop "$id" >/dev/null
+  fi
+  local sid
+  sid=$(session_of "$id")
+  require_image
+  use_task_user "$id"
+  printf '%s\n' "$sid" >"$t/resume"
+  log_turn "$id" attach
+  mapfile -t opts < <(task_container_opts "$id")
+  if [ -t 0 ] && [ -t 1 ]; then tty+=(-t); fi
+  echo "Opening session $sid. Exit Claude Code (/exit) to hand the task back." >&2
+  docker run --rm "${tty[@]}" "${opts[@]}" "$CLANK_IMAGE" \
+    bash /opt/clankstation/task-run interactive
+  echo "$id: $(task_state "$id")" >&2
+}
+
+# Human-readable view of the harness event stream.
+render_events() {
+  jq -Rr --unbuffered '
+    fromjson? |
+    if .type == "system" and .subtype == "init" then "[session " + .session_id + "]"
+    elif .type == "assistant" then
+      (.message.content[]? |
+        if .type == "text" then "● " + .text
+        elif .type == "tool_use" then "→ " + .name + " " + ((.input | tostring)[0:160])
+        else empty end)
+    elif .type == "result" then "✓ " + (if .is_error then "failed: " else "done: " end) + (.result // "")
+    else empty end'
+}
+
+cmd_logs() {
+  local follow=false id t pid
+  case "${1:-}" in -f | --follow) follow=true; shift ;; esac
+  id="${1:-}"
+  case "${2:-}" in -f | --follow) follow=true ;; esac
+  [ -n "$id" ] || die "usage: clankctl logs <task-id> [-f]"
+  t=$(task_dir "$id")
+  touch "$t/events.jsonl"
+  if [ "$follow" = true ] && [ "$(task_state "$id")" = running ]; then
+    pid=$(docker inspect -f '{{.State.Pid}}' "clank-$id")
+    tail -n +1 -f --pid="$pid" "$t/events.jsonl" | render_events
+  else
+    render_events <"$t/events.jsonl"
+  fi
+}
+
+# A shell in a task's environment: inside its running container, or in a new
+# container on its worktree when it isn't running.
+task_shell() {
+  local id="${1:-}" t opts tty=(-i)
+  [ -n "$id" ] || die "usage: clankctl shell --task <task-id> [cmd...]"
+  t=$(task_dir "$id")
+  shift
+  [ "$#" -gt 0 ] || set -- bash -l
+  if [ -t 0 ] && [ -t 1 ]; then tty+=(-t); fi
+  if [ "$(task_state "$id")" = running ]; then
+    docker exec "${tty[@]}" --user "$CLANK_UID:$CLANK_GID" --workdir /workspace "clank-$id" "$@"
+  else
+    require_image
+    use_task_user "$id"
+    # Not the task's own container name: a side shell doesn't make the task
+    # look running.
+    mapfile -t opts < <(task_container_opts "$id" "clank-$id-shell")
+    docker run --rm "${tty[@]}" "${opts[@]}" "$CLANK_IMAGE" "$@"
+  fi
+}
+
 case "${1:-}" in
+  resume) shift; cmd_resume "$@" ;;
+  stop) shift; cmd_stop "$@" ;;
+  attach) shift; cmd_attach "$@" ;;
+  logs) shift; cmd_logs "$@" ;;
   harness) shift; cmd_harness "$@" ;;
   login) shift; cmd_login "$@" ;;
   shell) shift; cmd_shell "$@" ;;
