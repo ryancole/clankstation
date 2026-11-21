@@ -28,6 +28,18 @@
           ]
           ++ modules;
         };
+
+      # What the installer installs, from two configurations (two-disk, one-disk).
+      installTargets = configs: {
+        twoDisk = {
+          system = configs.clankstation.config.system.build.toplevel;
+          disko = configs.clankstation.config.system.build.destroyFormatMount;
+        };
+        oneDisk = {
+          system = configs.clankstation-one-disk.config.system.build.toplevel;
+          disko = configs.clankstation-one-disk.config.system.build.destroyFormatMount;
+        };
+      };
     in
     {
       # All Clankstation modules. Hosts import this and set host-specific options.
@@ -39,14 +51,35 @@
       };
 
       nixosConfigurations = {
-        # The appliance itself (real hardware).
+        # The appliance itself (real hardware): OS disk + separate data disk.
         clankstation = mkHost [ ./hosts/clankstation ];
+
+        # The same, with data on the OS disk.
+        clankstation-one-disk = mkHost [
+          ./hosts/clankstation
+          { clankstation.storage.dataDisk = null; }
+        ];
 
         # Same system, plus VM settings for local testing.
         dev-vm = mkHost [
           ./hosts/clankstation
           ./hosts/dev-vm
         ];
+
+        # The installer ISO, carrying both appliance variants.
+        installer = nixpkgs.lib.nixosSystem {
+          modules = [
+            { nixpkgs.hostPlatform = system; }
+            ./installer
+            ./installer/iso.nix
+            { clankstation.installer = installTargets self.nixosConfigurations; }
+          ];
+        };
+      };
+
+      packages.${system} = {
+        # nix build ./src#installer-iso  ->  result/iso/clankstation-installer-*.iso
+        installer-iso = self.nixosConfigurations.installer.config.system.build.isoImage;
       };
 
       checks.${system} = {
@@ -56,6 +89,7 @@
         m4-task = import ./tests/m4-task.nix { inherit self pkgs; };
         m5-takeover = import ./tests/m5-takeover.nix { inherit self pkgs; };
         m6-devcontainer = import ./tests/m6-devcontainer.nix { inherit self pkgs; };
+        m7-installer = import ./tests/m7-installer.nix { inherit self pkgs; };
       }
       // import ./tests/m1-storage.nix { inherit self pkgs disko; };
 

@@ -47,7 +47,8 @@ broad permissions inside their environment.
 | Source location | All source under `src/`; the repo root holds only top-level files | Settled |
 | Default branch | `master` | Settled |
 | Access | LAN only, `clankstation.local` via Avahi/mDNS. Tailscale optional later | Settled (from brief) |
-| Code to Windows VMs | git over the libvirt network, not a file share (section 5.6) | Proposed: confirm at M8 |
+| Code to Windows VMs | git over the libvirt network, not a file share (section 5.6) | Proposed: confirm at M9 |
+| Installer | Offline ISO with prebuilt systems + disko scripts for both layouts; disks chosen at install via fixed `/dev/clank-{boot,data}` links | Settled (M7) |
 | Web stack, event protocol | Deferred to the service layer (section 8) | Open |
 
 ## 4. Architecture
@@ -292,7 +293,7 @@ How this works for Claude Code:
   keeps it there. Sign-in: `clankctl login claude` runs `claude auth login`
   (the vendor's flow) in a container. `clankctl harness status` shows
   `claude auth status`.
-- **Windows VMs** need their own design here (M8). One home volume can't be
+- **Windows VMs** need their own design here (M9). One home volume can't be
   shared with Windows as-is, so the likely shape is a native install in the
   base image plus a per-user config directory over virtiofs.
 - **Headless run:** `claude -p "<prompt>" --output-format stream-json --verbose
@@ -322,7 +323,7 @@ How this works for Claude Code:
   A running headless turn is stopped first, after a confirmation prompt or
   `--yes`. The harness is never driven by two processes at once. On exit the
   diff is refreshed and the task is handed back (`mode: interactive` in
-  `status.json`). Windows VMs will use a ConPTY session over SSH (M8).
+  `status.json`). Windows VMs will use a ConPTY session over SSH (M9).
 
 ### 5.8 clankctl (OS-phase admin CLI)
 
@@ -332,7 +333,7 @@ written as a shell application (`writeShellApplication`) so it doesn't commit
 us to a language before the web stack decision.
 
 ```
-clankctl project add <name> <git-url>    # --template <windows-template> comes with M8
+clankctl project add [--template auto|linux-default] <name> <git-url>   # Windows templates: M9
 clankctl project list
 clankctl harness enable claude          # opt-in install into the user's home volume
 clankctl harness status                 # installed version + `claude auth status`
@@ -347,7 +348,7 @@ clankctl resume <task-id> "<prompt>"    # keep going in the same session
 clankctl attach [--yes] <task-id>       # take over interactively
 clankctl stop <task-id>
 clankctl shell --task <task-id> [cmd]   # shell in the task's environment
-clankctl clean [--older-than 7d]        # M9
+clankctl clean [--older-than 7d]        # M10
 ```
 
 Task containers are started detached (`docker run --detach --rm`), so dockerd
@@ -358,10 +359,27 @@ layer.
 
 ### 5.9 Installation
 
-- A custom installer ISO built from the flake. It boots, asks which disk(s) to
-  use, runs disko and `nixos-install` with the Clankstation configuration, and
-  reboots. After the service layer exists, the user finishes setup in the web
-  GUI on `clankstation.local`.
+- An installer ISO built from the flake (`nix build ./src#installer-iso`;
+  `src/installer/`): a minimal NixOS live system on the latest kernel, UEFI
+  only. `sudo clankstation-install` does the rest:
+  1. Lists the disks and asks for the OS disk and an optional data disk.
+  2. Asks for an SSH public key for `admin`, or a console password if none is
+     given.
+  3. Asks you to type `ERASE`, then partitions, formats and installs.
+  4. Reboots.
+- **Fully offline:** the ISO carries both appliance variants (`clankstation`
+  for two disks, `clankstation-one-disk`) as prebuilt systems, with their disko
+  destroy-format-mount scripts. Their layouts target fixed paths
+  (`/dev/clank-boot`, `/dev/clank-data`), and the installer symlinks the chosen
+  disks there, so nothing is evaluated or built at install time.
+  `nixos-install --system` copies the closure from the ISO's store.
+- **SSH key:** written to `~admin/.ssh/authorized_keys`. `admin` has a fixed
+  uid 1000, so this works before first boot. SSH stays key-only.
+- **Boot entries:** systemd-boot writes an NVRAM boot entry and also installs
+  the removable fallback (`EFI/BOOT/BOOTX64.EFI`), so a disk moved to another
+  machine still boots.
+- After the service layer exists, the user finishes setup in the web GUI on
+  `clankstation.local`.
 - Cloud images (AWS, Azure) come later from the same configuration through the
   NixOS image builders.
 
@@ -381,7 +399,10 @@ layer.
   both layouts. `m2-docker` checks the Docker data-root on XFS and a
   uid-matched worktree bind mount. VM tests have no network, so it uses a
   digest-pinned `ubuntu:26.04` (`src/images/linux-default/base-image.nix`),
-  and the full image build is checked in the dev VM.
+  and the full image build is checked in the dev VM. `m7-installer` runs
+  `clankstation-install` in a UEFI VM onto two blank disks, boots them on a
+  fresh UEFI machine with no boot entries, and logs in over SSH with the
+  installed key.
 - Windows VM milestones need real hardware, or libvirt running directly in WSL.
   Windows inside build-vm inside WSL is too many layers of nesting to be usable.
 
@@ -407,9 +428,10 @@ Each milestone ends with a check in the VM.
 | M4 | First end-to-end task via `clankctl run` | A prompt runs headless in a container, survives SSH disconnect, and leaves a summary and a diff |
 | M5 | Take over and resume: `clankctl attach`, `clankctl resume` | Can attach to a running task, and continue a finished one |
 | M6 | devcontainer.json support | A repo with a devcontainer gets its own environment |
-| M7 | libvirt and unattended Windows base image | A base image builds from a user ISO with no clicks (real hardware) |
-| M8 | Windows tasks: overlays, git sync, harness over virtiofs | M4's check passes against a Windows template |
-| M9 | Cleanup timers and installer ISO | Fresh install from the ISO on a spare machine or VM; old tasks get pruned |
+| M7 | Installer ISO (moved up from M9 so the Windows milestones can run on real hardware) | The ISO installs offline in a VM test, and on the real box: it boots and takes SSH with the installed key |
+| M8 | libvirt and unattended Windows base image | A base image builds from a user ISO with no clicks (real hardware) |
+| M9 | Windows tasks: overlays, git sync, harness | M4's check passes against a Windows template |
+| M10 | Cleanup timers and updates | Old tasks and overlays get pruned; the box updates from this repo |
 
 M4 is the brief's first milestone ("send a prompt and come back to a finished
 diff"), driven from the CLI instead of the browser.
@@ -426,7 +448,7 @@ format, how needs-input tasks are shown and answered.
 ## 9. Open questions
 
 - Web stack and event protocol (service layer).
-- Code transfer to Windows VMs: confirm git sync at M8.
+- Code transfer to Windows VMs: confirm git sync at M9.
 - Windows licensing: how an unactivated or evaluation install is handled when
   no key is given.
 - How harness install and sign-in work in Windows VMs (5.7), given that the

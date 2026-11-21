@@ -81,6 +81,7 @@ in
   m1-storage-one-disk =
     mkTest "m1-storage-one-disk"
       {
+        dataDisk = null;
         espSize = "256M";
         rootSize = "3G";
       }

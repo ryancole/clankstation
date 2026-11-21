@@ -14,7 +14,12 @@
     cpu.amd.updateMicrocode = true;
   };
 
-  # Only used when disko formats the disks. The installer (M9) sets the real
-  # disk(s); after install, filesystems are mounted by partition label.
-  clankstation.storage.bootDisk = lib.mkDefault "/dev/nvme0n1";
+  # Disk paths are only used when the installer formats the disks. It points
+  # these fixed names at the disks you choose, so the prebuilt system and
+  # disko script on the ISO work for any machine. After install, filesystems
+  # are mounted by partition label. The one-disk variant sets dataDisk = null.
+  clankstation.storage = {
+    bootDisk = lib.mkDefault "/dev/clank-boot";
+    dataDisk = lib.mkDefault "/dev/clank-data";
+  };
 }

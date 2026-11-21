@@ -23,9 +23,11 @@
   i18n.defaultLocale = "en_US.UTF-8";
 
   # One admin login for the OS phase. The household account belongs to the
-  # service layer. SSH keys are set by the installer (M9).
+  # service layer. The installer writes the SSH key to ~admin/.ssh/authorized_keys.
   users.users.admin = {
     isNormalUser = true;
+    # Fixed, so the installer can write ~admin/.ssh before first boot.
+    uid = 1000;
     description = "Clankstation admin";
     extraGroups = [ "wheel" ];
   };
