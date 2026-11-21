@@ -105,10 +105,14 @@ pkgs.testers.runNixOSTest {
 
     # The admin can log in with the installed key, and has sudo.
     box.succeed(f"install -m 600 /dev/stdin /root/key <<'EOF'\n{private_key}EOF")
-    box.succeed(
-        "ssh -i /root/key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-        " admin@localhost 'sudo -n true && test \"$(stat -c %U ~/.ssh/authorized_keys)\" = admin'"
+    status, out = box.execute(
+        "ssh -i /root/key -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        " admin@localhost 'sudo -n true && test \"$(stat -c %U ~/.ssh/authorized_keys)\" = admin' 2>&1",
+        timeout=60,
     )
+    if status != 0:
+        print(box.succeed("ls -lan /home/admin /home/admin/.ssh; journalctl -u sshd --no-pager | tail -n 30"))
+    assert status == 0, out
     # ...but not with a password.
     box.fail(
         "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"

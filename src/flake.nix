@@ -90,6 +90,7 @@
         m5-takeover = import ./tests/m5-takeover.nix { inherit self pkgs; };
         m6-devcontainer = import ./tests/m6-devcontainer.nix { inherit self pkgs; };
         m7-installer = import ./tests/m7-installer.nix { inherit self pkgs; };
+        m8-windows-plumbing = import ./tests/m8-windows-plumbing.nix { inherit self pkgs; };
       }
       // import ./tests/m1-storage.nix { inherit self pkgs disko; };
 

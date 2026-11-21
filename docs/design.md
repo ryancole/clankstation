@@ -49,6 +49,7 @@ broad permissions inside their environment.
 | Access | LAN only, `clankstation.local` via Avahi/mDNS. Tailscale optional later | Settled (from brief) |
 | Code to Windows VMs | git over the libvirt network, not a file share (section 5.6) | Proposed: confirm at M9 |
 | Installer | Offline ISO with prebuilt systems + disko scripts for both layouts; disks chosen at install via fixed `/dev/clank-{boot,data}` links | Settled (M7) |
+| Windows base images | Unattended install from the user's ISO via an answer-file CD; generic key (unactivated) unless one is given; Secure Boot off + check bypass; TPM 2.0 via swtpm; local `agent` account; host drives VMs over OpenSSH | Settled (M8) |
 | Web stack, event protocol | Deferred to the service layer (section 8) | Open |
 
 ## 4. Architecture
@@ -155,10 +156,11 @@ Directory tree, created with `systemd.tmpfiles`:
                               environment (harness installs, sign-in, caches)
   docker/                     Docker data-root
   vm/
-    base/<template>.qcow2     prepared Windows base images (read-only once built)
+    base/<name>.qcow2         prepared Windows base images (read-only), + .json, .password
+    build/<name>/             base image builds: answer CD, disk, serial.log, screen.png
+    iso/                      user-supplied Windows ISOs
     overlays/<task-id>.qcow2  per-task copy-on-write overlays
     tools/<name>.qcow2        optional shared toolchain disks (large SDKs), overlaid per task
-    iso/                      user-supplied Windows ISO, virtio-win drivers
   cache/                      shared build caches (later)
 ```
 
@@ -224,20 +226,53 @@ bare-metal instances or the newer types that allow nested virtualization.
 
 ### 5.5 Windows environments (libvirt)
 
-- `virtualisation.libvirtd.enable` (QEMU 10.2, libvirt 12.2), with
-  `qemu.swtpm.enable` for the TPM 2.0 that Windows 11 needs. OVMF/Secure Boot
-  firmware ships with QEMU by default in this release (the old
-  `qemu.ovmf` submodule is removed). virtiofsd goes in via
-  `qemu.vhostUserPackages`.
+- **libvirt** (`src/modules/libvirt.nix`, M8): QEMU 10.2 and libvirt 12.2,
+  with `qemu.swtpm.enable` for the TPM 2.0 that Windows 11 needs.
+  - **Firmware:** UEFI comes from QEMU's bundled edk2 (`<os firmware='efi'>`)
+    with Secure Boot off; setup's Secure Boot check is bypassed instead.
+  - **QEMU:** runs as root with `dynamic_ownership = 0`, so images and logs
+    keep their `clankstation` owner.
+  - **Network:** VMs use the NAT network `clank` (bridge `clankbr0`,
+    192.168.250.0/24, host .1), defined at boot by a oneshot unit. Docker gets
+    `ip-forward-no-drop`; otherwise its FORWARD DROP policy also drops the
+    VMs' traffic.
+  - **Later:** virtiofsd would go in via `qemu.vhostUserPackages`.
 - **Base image provisioning**, unattended:
-  1. The user supplies a Windows ISO and, optionally, a product key.
-  2. The host generates an `autounattend.xml` on a small attached image and
-     attaches the latest stable virtio-win driver ISO.
-  3. Post-install scripts install the toolchain: latest Visual Studio Build
-     Tools, Git, PowerShell 7, OpenSSH server. A template can add more
-     (for example .NET SDKs or a game engine), optionally on a separate
-     toolchain disk so several templates can share one large install.
-  4. The VM shuts down. The disk becomes a read-only base image.
+  `clankctl windows build-base <name> --iso <file>`. Files are in
+  `src/images/windows/`.
+  1. **Answer-file CD:** the user copies a Windows ISO into `vm/iso/`.
+     clankctl writes a CD (`genisoimage`) with `Autounattend.xml`,
+     `setup.ps1`, `config.json`, the virtio `viostor`/`vioscsi`/`NetKVM`
+     drivers and `virtio-win-guest-tools.exe` (virtio-win from nixpkgs).
+  2. **Answer file:** it selects the edition by name (default
+     "Windows 11 Pro"). With no `--key`, it uses Microsoft's public generic
+     install key, which installs unactivated. It bypasses the TPM, Secure
+     Boot, RAM and CPU checks, and turns off automatic device encryption (each
+     task VM gets a fresh TPM). It creates a local `agent` administrator with
+     a generated password (kept in `vm/base/<name>.password`, for the console
+     only) and one autologon to run `setup.ps1`.
+  3. **The install VM:** a transient libvirt domain (`build-domain.xml`):
+     q35, a virtio disk and NIC, the Windows ISO and answer CD on SATA, a
+     TPM 2.0 emulator, Hyper-V enlightenments, COM1 to `serial.log`, and VNC
+     on localhost. A background process presses Enter for the DVD's "press
+     any key" prompt, waits for power-off (4 h limit) and saves a screenshot
+     every 20 s (`clankctl windows screenshot`).
+  4. **`setup.ps1`:** installs the virtio guest tools, OpenSSH server (with
+     PowerShell 7 as its shell), the latest PowerShell 7 and Git for Windows
+     (GitHub releases), and the latest VS Build Tools C++ workload
+     (`aka.ms/vs/stable`, unless `--no-build-tools`, then checked by finding
+     `cl.exe`). It sets long paths, a high-performance power plan, no
+     hibernation, no automatic update reboots and Defender exclusions for
+     build directories. It turns autologon off, logs to COM1, and powers off
+     after `CLANK-SETUP-DONE` or `CLANK-SETUP-FAILED`.
+  5. **Finalize:** on `DONE`, the disk becomes `vm/base/<name>.qcow2`
+     (read-only) with `vm/base/<name>.json`.
+  - A template can add more tools later (for example .NET SDKs or a game
+    engine), optionally on a separate toolchain disk so several templates
+    can share one large install.
+- **Data disk growth:** `clankstation-grow-data` grows the data partition and
+  its XFS filesystem to fill the disk on every boot (`growpart` +
+  `xfs_growfs`), for enlarged virtual and cloud disks.
 - **Per task**: a qcow2 overlay on the base image, plus an overlay on each
   toolchain disk the template uses. The VM gets a unique hostname at first
   boot. The overlays are deleted when the task is cleaned up.
@@ -402,7 +437,11 @@ layer.
   and the full image build is checked in the dev VM. `m7-installer` runs
   `clankstation-install` in a UEFI VM onto two blank disks, boots them on a
   fresh UEFI machine with no boot entries, and logs in over SSH with the
-  installed key.
+  installed key. `m8-windows-plumbing` covers everything around a Windows
+  build except Windows itself: libvirt, swtpm, the `clank` network, Docker's
+  forward policy, data-disk growth, and a dry-run `build-base` (valid answer
+  file, answer CD contents, a domain libvirt accepts and boots to firmware).
+  The real Windows install runs on the box.
 - Windows VM milestones need real hardware, or libvirt running directly in WSL.
   Windows inside build-vm inside WSL is too many layers of nesting to be usable.
   A Hyper-V Gen 2 VM with nested virtualization works as a stand-in box:
@@ -452,8 +491,12 @@ format, how needs-input tasks are shown and answered.
 
 - Web stack and event protocol (service layer).
 - Code transfer to Windows VMs: confirm git sync at M9.
-- Windows licensing: how an unactivated or evaluation install is handled when
-  no key is given.
+- Windows licensing: base images install unactivated with the generic key
+  unless `--key` is given. Decide how activation works for task VMs cloned
+  from one base (activation per clone vs. never activating).
+- The first Windows build attempt once restarted out of setup before copying
+  any files (cause unknown; the retry worked). If it recurs, the build's
+  screenshots will show the error.
 - How harness install and sign-in work in Windows VMs (5.7), given that the
   Linux home volume can't simply be shared.
 - Retention defaults for finished tasks and overlays.

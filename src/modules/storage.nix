@@ -6,10 +6,51 @@
 #
 # Filesystems are mounted by GPT partition label, so the device paths below
 # only matter when disko formats the disks (at install time).
-{ config, lib, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   cfg = config.clankstation.storage;
   dataRoot = "/var/lib/clankstation";
+
+  # clankstation-grow-data <mountpoint>: grow the partition behind an XFS
+  # mount to the end of its disk, then the filesystem to the partition.
+  growData = pkgs.writeShellApplication {
+    name = "clankstation-grow-data";
+    runtimeInputs = with pkgs; [
+      cloud-utils
+      coreutils
+      gawk
+      gnused
+      gptfdisk
+      util-linux
+      xfsprogs
+    ];
+    text = ''
+      mnt="$1"
+      part=$(findmnt -no SOURCE "$mnt")
+      part=$(readlink -f "$part")
+      name=$(basename "$part")
+      if [ ! -e "/sys/class/block/$name/partition" ]; then
+        echo "$mnt is on $part, not a partition; growing the filesystem only"
+        xfs_growfs "$mnt" >/dev/null
+        exit 0
+      fi
+      disk="/dev/$(lsblk -no PKNAME "$part" | head -n 1)"
+      number=$(cat "/sys/class/block/$name/partition")
+      # growpart exits 1 with NOCHANGE when the partition already fills the disk.
+      out=$(growpart "$disk" "$number" 2>&1) || case "$out" in
+        *NOCHANGE*) ;;
+        *) echo "$out" >&2; exit 1 ;;
+      esac
+      echo "$out"
+      xfs_growfs "$mnt" | tail -n 1
+      df -h "$mnt" | tail -n 1
+    '';
+  };
 
   esp = {
     type = "EF00";
@@ -122,31 +163,43 @@ in
 
     boot.supportedFilesystems = [ "xfs" ];
 
-    # The data tree. Work data belongs to the `clankstation` service user
-    # (modules/service-user.nix); VM images stay root-owned for libvirt.
-    systemd.tmpfiles.settings."10-clankstation" =
-      let
-        dir = owner: {
-          d = {
-            mode = "0755";
-            user = owner;
-            group = owner;
-          };
-        };
-        under = owner: dirs: lib.genAttrs (map (d: "${dataRoot}/${d}") dirs) (_: dir owner);
-      in
-      under "clankstation" [
+    # The data tree, owned by the `clankstation` service user
+    # (modules/service-user.nix). libvirt's QEMU runs as root, so it can read
+    # the VM images too.
+    systemd.tmpfiles.settings."10-clankstation" = lib.genAttrs
+      (map (d: "${dataRoot}/${d}") [
         "projects"
         "tasks"
         "users"
         "cache"
-      ]
-      // under "root" [
         "vm"
         "vm/base"
+        "vm/build"
         "vm/overlays"
         "vm/tools"
         "vm/iso"
-      ];
+      ])
+      (_: {
+        d = {
+          mode = "0755";
+          user = "clankstation";
+          group = "clankstation";
+        };
+      });
+
+    # Grow the data partition and its XFS filesystem to fill the disk, on
+    # every boot. Covers a virtual disk that was enlarged (Hyper-V, cloud
+    # volumes) and is a no-op otherwise.
+    environment.systemPackages = [ growData ];
+    systemd.services.clankstation-grow-data = {
+      description = "Grow ${dataRoot} to fill its disk";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "local-fs.target" ];
+      unitConfig.RequiresMountsFor = [ dataRoot ];
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${lib.getExe growData} ${dataRoot}";
+      };
+    };
   };
 }

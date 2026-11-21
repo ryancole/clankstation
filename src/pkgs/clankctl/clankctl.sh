@@ -7,6 +7,8 @@
 #   CLANK_TASK_RUN    in-container task runner script (store path)
 #   CLANK_BASH        bash from the Nix store, used to start the runner
 #   CLANK_AGENT_LAYER build context for the agent layer on devcontainer images
+#   CLANK_WINDOWS_TEMPLATES  Autounattend.xml, setup.ps1, build-domain.xml
+#   CLANK_VIRTIO_WIN  virtio-win drivers and guest tools (unpacked)
 #
 # Harness rule: clankctl never reads, copies or prints harness credentials.
 # Sign-in happens inside the container through the vendor's own flow, and
@@ -48,6 +50,18 @@ Environments:
                                  The same, inside a task's environment (its running
                                  container, or a new one on its worktree)
 
+Windows base images (QEMU/KVM):
+  windows build-base <name> --iso <file> [--edition NAME] [--key KEY]
+                     [--disk SIZE] [--memory MIB] [--cpus N] [--no-build-tools]
+                                 Install Windows unattended from an ISO and keep the
+                                 result as a read-only base image (takes ~1 hour)
+  windows list                   Base images and builds in progress
+  windows log <name> [-f]        Setup progress of a build
+  windows screenshot <name> <file.png>
+                                 The build VM's screen (updated every 20 s)
+  windows cancel <name>          Stop a build
+  windows remove <name>          Delete a base image (or a failed build)
+
 Environment variables:
   CLANK_USER                     Household user whose home volume to use (default: default)
 EOF
@@ -60,7 +74,7 @@ die() {
 
 # Run as the clankstation service user, so files get the right owner.
 if [ "$(id -u)" != "$CLANK_UID" ]; then
-  exec sudo --preserve-env=CLANK_USER,TERM -u "#$CLANK_UID" -- "$0" "$@"
+  exec sudo --preserve-env=CLANK_USER,CLANK_WINDOWS_DRY_RUN,TERM -u "#$CLANK_UID" -- "$0" "$@"
 fi
 
 valid_name() {
@@ -656,7 +670,261 @@ task_shell() {
   fi
 }
 
+# ---- Windows base images (design: 5.5) ------------------------------------------
+
+export LIBVIRT_DEFAULT_URI=qemu:///system
+vm_dir="$CLANK_DATA/vm"
+
+# Microsoft's published generic installation keys: they pick the edition and
+# install unactivated. A real key can be passed with --key.
+generic_key() {
+  case "$1" in
+    "Windows 11 Pro") echo VK7JG-NPHTM-C97JM-9MPGT-3V66T ;;
+    "Windows 11 Home") echo YTMG3-N6DKC-DKB77-7M9GH-8HVX7 ;;
+    "Windows 11 Pro for Workstations") echo DXG7C-N36C4-C4HTG-X4T3X-2YV77 ;;
+    "Windows 11 Education") echo YNMGQ-8RYV3-4PGQ3-C8XTP-7CFBY ;;
+    *) return 1 ;;
+  esac
+}
+
+xml_escape() {
+  local s="$1"
+  s=${s//&/&amp;}
+  s=${s//</&lt;}
+  s=${s//>/&gt;}
+  s=${s//\"/&quot;}
+  printf '%s' "$s"
+}
+
+# fill_template <file> KEY value [KEY value...]: replace @KEY@ literally.
+fill_template() {
+  local text
+  text=$(cat "$1")
+  shift
+  while [ "$#" -ge 2 ]; do
+    text=${text//"@$1@"/"$2"}
+    shift 2
+  done
+  printf '%s\n' "$text"
+}
+
+windows_state() {
+  local name="$1"
+  if [ -f "$vm_dir/base/$name.json" ]; then
+    echo ready
+  elif [ -f "$vm_dir/build/$name/state" ]; then
+    local state pid
+    state=$(cat "$vm_dir/build/$name/state")
+    pid=$(cat "$vm_dir/build/$name/pid" 2>/dev/null || echo 0)
+    if [ "$state" = building ] && ! kill -0 "$pid" 2>/dev/null; then
+      echo "failed: the build process went away"
+    else
+      echo "$state"
+    fi
+  else
+    echo none
+  fi
+}
+
+cmd_windows_build() {
+  local name="${1:-}"
+  [ -n "$name" ] && shift
+  valid_name "$name" || die "usage: clankctl windows build-base <name> --iso <file> [options]"
+  local iso="" edition="Windows 11 Pro" key="" disk=128G memory=8192 cpus=4 build_tools=true
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --iso) iso="${2:-}"; shift 2 ;;
+      --edition) edition="${2:-}"; shift 2 ;;
+      --key) key="${2:-}"; shift 2 ;;
+      --disk) disk="${2:-}"; shift 2 ;;
+      --memory) memory="${2:-}"; shift 2 ;;
+      --cpus) cpus="${2:-}"; shift 2 ;;
+      --no-build-tools) build_tools=false; shift ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  [ -n "$iso" ] || die "--iso is required"
+  case "$iso" in /*) ;; *) iso="$vm_dir/iso/$iso" ;; esac
+  [ -r "$iso" ] || die "can't read $iso. Copy the ISO onto the box, then: sudo install -o clankstation -g clankstation -m 0644 <file> $vm_dir/iso/"
+  [[ "$memory" =~ ^[0-9]+$ ]] && [[ "$cpus" =~ ^[0-9]+$ ]] || die "--memory (MiB) and --cpus are numbers"
+  [ -n "$key" ] || key=$(generic_key "$edition") ||
+    die "no generic install key for \"$edition\"; pass --key"
+  case "$(windows_state "$name")" in
+    ready) die "base image $name already exists (clankctl windows remove $name)" ;;
+    building) die "base image $name is already being built (clankctl windows log $name)" ;;
+  esac
+
+  local b="$vm_dir/build/$name" domain="clank-build-$name" password
+  rm -rf "$b"
+  mkdir -p "$b/answer/drivers"
+  # A Clankstation-generated password for the local `agent` account (console
+  # only; task VMs are driven over SSH).
+  password="Clank-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+  (umask 077 && printf '%s\n' "$password" >"$b/password")
+
+  # The answer-file CD: Autounattend.xml, setup.ps1 + config.json, and the
+  # virtio drivers setup needs to see the disk and network.
+  local d
+  for d in viostor vioscsi NetKVM; do
+    cp -r "$CLANK_VIRTIO_WIN/$d/w11/amd64" "$b/answer/drivers/$d"
+  done
+  cp "$CLANK_VIRTIO_WIN/virtio-win-guest-tools.exe" "$CLANK_WINDOWS_TEMPLATES/setup.ps1" "$b/answer/"
+  fill_template "$CLANK_WINDOWS_TEMPLATES/Autounattend.xml" \
+    LOCALE en-US \
+    EDITION "$(xml_escape "$edition")" \
+    PRODUCT_KEY "$(xml_escape "$key")" \
+    PASSWORD "$(xml_escape "$password")" >"$b/answer/Autounattend.xml"
+  jq -n --arg name "$name" --argjson tools "$build_tools" \
+    '{name: $name, buildTools: (if $tools then ["Microsoft.VisualStudio.Workload.VCTools"] else [] end)}' \
+    >"$b/answer/config.json"
+  chmod -R u+w "$b/answer"
+  # (from $b: genisoimage looks for rc files in the current directory)
+  (cd "$b" && genisoimage -quiet -J -joliet-long -r -V CLANKSETUP -o answer.iso answer)
+
+  qemu-img create -q -f qcow2 "$b/disk.qcow2" "$disk"
+  : >"$b/serial.log"
+  chmod 0644 "$b/serial.log"
+
+  local domain_type=kvm cpu_mode=host-passthrough
+  if [ ! -e /dev/kvm ]; then domain_type=qemu cpu_mode=maximum; fi
+  fill_template "$CLANK_WINDOWS_TEMPLATES/build-domain.xml" \
+    DOMAIN_TYPE "$domain_type" \
+    CPU_MODE "$cpu_mode" \
+    DOMAIN "$domain" \
+    MEMORY_MIB "$memory" \
+    CPUS "$cpus" \
+    DISK "$b/disk.qcow2" \
+    WINDOWS_ISO "$(xml_escape "$iso")" \
+    ANSWER_ISO "$b/answer.iso" \
+    SERIAL_LOG "$b/serial.log" >"$b/domain.xml"
+  printf 'name=%s\ndomain=%s\niso=%s\nedition=%s\ndisk=%s\nstarted=%s\n' \
+    "$name" "$domain" "$iso" "$edition" "$disk" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$b/build.env"
+
+  if [ "${CLANK_WINDOWS_DRY_RUN:-}" = 1 ]; then
+    echo "dry run: files in $b"
+    return
+  fi
+  echo building >"$b/state"
+  setsid "$0" _windows-build "$name" >>"$b/build.log" 2>&1 </dev/null &
+  echo "$!" >"$b/pid"
+  echo "Building Windows base image $name ($edition). This takes about an hour."
+  echo "Follow it with: clankctl windows log $name -f"
+}
+
+# Background half of build-base: run the install VM until it powers off.
+cmd_windows_build_run() {
+  local name="$1" b="$vm_dir/build/$1" domain
+  domain=$(kv "$b/build.env" domain)
+  if ! virsh create "$b/domain.xml"; then
+    echo "failed: could not start the install VM (see $b/build.log)" >"$b/state"
+    return 1
+  fi
+  # The Windows DVD's boot loader waits for "press any key".
+  local _
+  for _ in $(seq 1 20); do
+    virsh send-key "$domain" KEY_ENTER >/dev/null 2>&1 || break
+    sleep 1.5
+  done
+  local deadline=$((SECONDS + 4 * 3600))
+  while [ "$(virsh domstate "$domain" 2>/dev/null)" = running ]; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      virsh destroy "$domain" >/dev/null 2>&1 || true
+      echo "failed: setup didn't finish within 4 hours (see: clankctl windows log $name)" >"$b/state"
+      return 1
+    fi
+    # Keep the latest screen, so a stuck or failed setup can be seen
+    # (clankctl windows screenshot).
+    if virsh screenshot "$domain" "$b/screen.raw" >/dev/null 2>&1; then
+      # libvirt hands back PNG or PPM depending on the display backend.
+      if [ "$(head -c 4 "$b/screen.raw" | od -An -tx1 | tr -d ' \n')" = 89504e47 ]; then
+        mv "$b/screen.raw" "$b/screen.png"
+      elif pnmtopng "$b/screen.raw" >"$b/screen.png.tmp" 2>/dev/null; then
+        mv "$b/screen.png.tmp" "$b/screen.png"
+      fi
+      rm -f "$b/screen.raw" "$b/screen.png.tmp"
+    fi
+    sleep 20
+  done
+  if grep -q CLANK-SETUP-DONE "$b/serial.log"; then
+    mv "$b/disk.qcow2" "$vm_dir/base/$name.qcow2"
+    chmod 0444 "$vm_dir/base/$name.qcow2"
+    install -m 0600 "$b/password" "$vm_dir/base/$name.password"
+    jq -n --arg name "$name" --arg edition "$(kv "$b/build.env" edition)" \
+      --arg iso "$(basename "$(kv "$b/build.env" iso)")" \
+      --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --argjson tools "$(jq .buildTools "$b/answer/config.json")" \
+      '{name: $name, edition: $edition, iso: $iso, created: $created, buildTools: $tools, user: "agent"}' \
+      >"$vm_dir/base/$name.json"
+    echo ready >"$b/state"
+  else
+    local reason
+    reason=$(tr -d '\r' <"$b/serial.log" | grep -o 'CLANK-SETUP-FAILED.*' | tail -n 1 || true)
+    echo "failed: ${reason:-the VM stopped before setup finished (see: clankctl windows log $name)}" >"$b/state"
+  fi
+}
+
+cmd_windows() {
+  case "${1:-}" in
+    build-base) shift; cmd_windows_build "$@" ;;
+    list)
+      local f name
+      printf '%-20s %-10s %s\n' NAME STATE DETAILS
+      for f in "$vm_dir"/base/*.json; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f" .json)
+        printf '%-20s %-10s %s, %s on disk, built %s\n' "$name" ready "$(jq -r .edition "$f")" \
+          "$(du -h "$vm_dir/base/$name.qcow2" | cut -f1)" "$(jq -r .created "$f")"
+      done
+      for f in "$vm_dir"/build/*/state; do
+        [ -f "$f" ] || continue
+        name=$(basename "$(dirname "$f")")
+        [ -f "$vm_dir/base/$name.json" ] && continue
+        printf '%-20s %-10s %s\n' "$name" "$(windows_state "$name" | cut -d: -f1)" \
+          "$(tr -d '\r' <"$vm_dir/build/$name/serial.log" | tail -n 1 | cut -c1-80)"
+      done
+      ;;
+    log)
+      local name="${2:-}" follow="${3:-}"
+      valid_name "$name" || die "usage: clankctl windows log <name> [-f]"
+      [ -f "$vm_dir/build/$name/serial.log" ] || die "no build log for $name"
+      echo "state: $(windows_state "$name")" >&2
+      if [ "$follow" = -f ] && [ "$(windows_state "$name")" = building ]; then
+        tail -n +1 -f --pid="$(cat "$vm_dir/build/$name/pid")" "$vm_dir/build/$name/serial.log" | tr -d '\r'
+      else
+        tr -d '\r' <"$vm_dir/build/$name/serial.log"
+      fi
+      ;;
+    screenshot)
+      local name="${2:-}" out="${3:-}"
+      valid_name "$name" && [ -n "$out" ] || die "usage: clankctl windows screenshot <name> <file.png>"
+      [ -f "$vm_dir/build/$name/screen.png" ] || die "no screenshot of $name yet"
+      cat "$vm_dir/build/$name/screen.png" >"$out"
+      echo "Saved the build VM's screen to $out ($(date -r "$vm_dir/build/$name/screen.png" +%H:%M:%S))."
+      ;;
+    cancel)
+      local name="${2:-}"
+      valid_name "$name" || die "usage: clankctl windows cancel <name>"
+      [ "$(windows_state "$name")" = building ] || die "$name is not building"
+      virsh destroy "clank-build-$name" >/dev/null 2>&1 || true
+      kill "$(cat "$vm_dir/build/$name/pid")" 2>/dev/null || true
+      echo "failed: cancelled" >"$vm_dir/build/$name/state"
+      echo "Cancelled."
+      ;;
+    remove)
+      local name="${2:-}"
+      valid_name "$name" || die "usage: clankctl windows remove <name>"
+      [ "$(windows_state "$name")" != building ] || die "$name is building (clankctl windows cancel $name)"
+      rm -f "$vm_dir/base/$name.qcow2" "$vm_dir/base/$name.json" "$vm_dir/base/$name.password"
+      rm -rf "${vm_dir:?}/build/$name"
+      echo "Removed $name."
+      ;;
+    *) die "usage: clankctl windows build-base|list|log|cancel|remove" ;;
+  esac
+}
+
 case "${1:-}" in
+  windows) shift; cmd_windows "$@" ;;
+  _windows-build) shift; cmd_windows_build_run "$@" ;;
   _prepare) shift; cmd_prepare "$@" ;;
   resume) shift; cmd_resume "$@" ;;
   stop) shift; cmd_stop "$@" ;;

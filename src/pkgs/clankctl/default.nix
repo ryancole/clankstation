@@ -13,6 +13,11 @@
   gnused,
   jq,
   util-linux,
+  cdrkit,
+  libvirt,
+  netpbm,
+  qemu,
+  virtio-win,
   dataRoot,
   uid,
   gid,
@@ -44,6 +49,9 @@ let
   # Extra layer on a project's devcontainer image: the agent user (uid/gid
   # matching the host's clankstation user).
   agentLayer = ../../images/devcontainer-agent;
+
+  # Answer file, setup script and domain template for Windows base images.
+  windowsTemplates = ../../images/windows;
 in
 writeShellApplication {
   name = "clankctl";
@@ -59,6 +67,10 @@ writeShellApplication {
     gnused
     jq
     util-linux
+    cdrkit
+    libvirt
+    netpbm
+    qemu
   ];
   text = ''
     CLANK_DATA=${lib.escapeShellArg dataRoot}
@@ -68,6 +80,8 @@ writeShellApplication {
     CLANK_TASK_RUN=${taskRun}
     CLANK_BASH=${bashInteractive}/bin/bash
     CLANK_AGENT_LAYER=${agentLayer}
+    CLANK_WINDOWS_TEMPLATES=${windowsTemplates}
+    CLANK_VIRTIO_WIN=${virtio-win}
   ''
   + builtins.readFile ./clankctl.sh;
 

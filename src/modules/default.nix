@@ -5,6 +5,7 @@
     ./storage.nix
     ./service-user.nix
     ./docker.nix
+    ./libvirt.nix
     ./clankctl.nix
   ];
 }
