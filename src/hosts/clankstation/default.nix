@@ -8,6 +8,10 @@
     efi.canTouchEfiVariables = true;
   };
 
+  # Disk drivers the initrd needs beyond NixOS's defaults: Hyper-V's synthetic
+  # SCSI (Gen 2 VMs), so Clankstation also installs and boots in Hyper-V.
+  boot.initrd.availableKernelModules = [ "hv_storvsc" ];
+
   hardware = {
     enableRedistributableFirmware = true;
     cpu.intel.updateMicrocode = true;
