@@ -57,14 +57,16 @@ repo, so wrap commands in `nix shell ...#git`. From the repo root in WSL
 ```
 export NIX_CONFIG="experimental-features = nix-command flakes"
 nix shell nixpkgs/nixos-26.05#git -c nix flake check ./src      # eval + VM tests
-nix shell nixpkgs/nixos-26.05#git -c nix build ./src#nixosConfigurations.dev-vm.config.system.build.vmWithDisko
-./result/bin/disko-vm                                             # boots from fresh disko-formatted disks
+nix shell nixpkgs/nixos-26.05#git -c nix build ./src#nixosConfigurations.dev-vm.config.system.build.devVm
+./result/bin/clank-dev-vm                                         # --reset wipes the persistent data disk
 ssh -p 2222 admin@localhost                                       # dev VM only: password admin
 ```
 
-- The dev VM uses disko's `vmWithDisko`, not plain `build-vm`. The disko layout
-  mounts the data disk by partition label, and plain `build-vm` has no such
-  disk, so boot would hang waiting for it.
+- The dev VM boots from disko-formatted disks, not plain `build-vm`. The disko
+  layout mounts the data disk by partition label, and plain `build-vm` has no
+  such disk, so boot would hang waiting for it. Its data disk
+  (`~/.local/share/clankstation-dev/data.qcow2` in WSL) persists across runs:
+  the user's Claude sign-in lives there. Don't `--reset` it without asking.
 - disko-based VM tests (`src/tests/m1-storage.nix`) must end with
   `machine.shutdown()`, or the build hangs after the test passes.
 

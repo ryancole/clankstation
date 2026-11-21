@@ -135,11 +135,15 @@ Directory tree, created with `systemd.tmpfiles`:
 ```
 /var/lib/clankstation/
   projects/<project>/
-    mirror.git                bare clone of the remote; source for all worktrees
-  tasks/<task-id>/
-    worktree/                 git worktree (Linux tasks)
-    events.jsonl              raw harness event stream
-    result/                   final summary, diff, metadata
+    mirror.git                bare mirror of the remote; source for every task clone
+    project.env               url=, template=
+  tasks/<task-id>/            task id: t-YYYYMMDD-HHMMSS-xxxx
+    task.env                  project, branch, base, created, user
+    prompt.txt, base          inputs for the in-container runner
+    worktree/                 the task's own local clone, on branch clank/<task-id>
+    events.jsonl, stderr.log  raw harness stream-json events and stderr
+    status.json               state (done/failed), exit code, session id, times
+    result/                   summary.md, diff.patch, diffstat.txt
   users/<user>/
     home/                     per-user home volume, mounted as /home/agent in every
                               environment (harness installs, sign-in, caches)
@@ -213,8 +217,15 @@ bare-metal instances or the newer types that allow nested virtualization.
 
 ### 5.6 Getting code into and out of environments
 
-- **Linux containers:** bind-mount the task worktree. The diff is computed on
-  the host.
+- **Linux containers:** each task gets a local `git clone` of the project
+  mirror. Objects are hardlinked, so it's cheap on the same filesystem, and
+  `origin` is set back to the real upstream URL. It's checked out on branch
+  `clank/<task-id>` and bind-mounted at `/workspace`. A clone rather than a
+  `git worktree`, because a worktree's `.git` file points at an absolute host
+  path that doesn't exist inside the container, and because a clone keeps the
+  agent away from the mirror. The diff (against the base commit, untracked
+  files included, using a temporary index so the agent's own index is left
+  alone) is written at the end of the task.
 - **Windows VMs (proposed):** git over the libvirt network. The host serves the
   project mirror (read-only smart HTTP, or `git daemon` on the libvirt bridge
   only). The VM clones the task branch onto its own NTFS disk, and pushes the
@@ -256,9 +267,13 @@ How this works for Claude Code:
 - **Windows VMs** need their own design here (M8). One home volume can't be
   shared with Windows as-is, so the likely shape is a native install in the
   base image plus a per-user config directory over virtiofs.
-- **Headless run:** `claude -p "<prompt>" --output-format stream-json --verbose`
-  with permissions bypassed inside the environment (the environment is the
-  sandbox). Events go to `tasks/<id>/events.jsonl`.
+- **Headless run:** `claude -p "<prompt>" --output-format stream-json --verbose
+  --permission-mode bypassPermissions`, as the non-root `agent` user (the
+  environment is the sandbox). A small runner script
+  (`src/pkgs/clankctl/task-run.sh`, mounted read-only into the container) runs
+  the harness, then writes the summary (the final `result` event), the session
+  id (the `init` event), the diff and `status.json`. It is the first, shell-only
+  form of the per-environment worker. Events go to `tasks/<id>/events.jsonl`.
 - **Keep going / answer a question:** a new headless run with
   `--resume <session-id>` in the same environment and worktree.
 - **Take over:** start `claude --resume <session-id>` interactively in a
@@ -273,21 +288,26 @@ written as a shell application (`writeShellApplication`) so it doesn't commit
 us to a language before the web stack decision.
 
 ```
-clankctl project add <name> <git-url> [--template linux-default|<windows-template>]
+clankctl project add <name> <git-url>    # --template <windows-template> comes with M8
+clankctl project list
 clankctl harness enable claude          # opt-in install into the user's home volume
 clankctl harness status                 # installed version + `claude auth status`
 clankctl login claude                   # vendor sign-in (`claude auth login`)
 clankctl shell [cmd...]                 # shell in the default image with the home volume
 clankctl run <project> "<prompt>"       # create task, start env, run headless
-clankctl status [<task-id>]
+clankctl status                         # all tasks: running / done / failed / lost
+clankctl show <task-id>                 # prompt, state, session, summary, diffstat
 clankctl attach <task-id>               # live terminal in the task environment
 clankctl diff <task-id>
 clankctl resume <task-id> "<prompt>"
 clankctl clean [--older-than 7d]
 ```
 
-Tasks run as systemd transient units (`systemd-run`), so they keep going after
-the SSH session that started them disconnects.
+Task containers are started detached (`docker run --detach --rm`), so dockerd
+owns them. They keep going after the SSH session that started them
+disconnects, and `live-restore` keeps them running through dockerd restarts.
+There is no queue or concurrency limit yet; that comes with the service
+layer.
 
 ### 5.9 Installation
 
@@ -302,9 +322,12 @@ the SSH session that started them disconnects.
 
 - Development happens on Windows 11 with Nix in the `NixOS` WSL distro, which
   has KVM.
-- The `dev-vm` host for manual checks, built as disko's `vmWithDisko`. It boots
-  from fresh disk images formatted with the real layout (16 GiB boot disk,
-  20 GiB data disk).
+- The `dev-vm` host for manual checks (`system.build.devVm`, a wrapper around
+  disko's VM variant). It boots from disks formatted with the real layout
+  (16 GiB boot disk, 20 GiB data disk). The root disk is fresh on every run.
+  The data disk persists in `~/.local/share/clankstation-dev/` in WSL, so
+  sign-ins, projects, tasks and Docker images survive rebuilds (`--reset`
+  wipes it).
 - NixOS VM tests in `src/tests/` for automated checks, run by `nix flake check`.
   `m0-boot` covers SSH and mDNS between two nodes. `m1-storage-*` uses disko's
   test helper to format blank disks, install the system, boot it, and check
