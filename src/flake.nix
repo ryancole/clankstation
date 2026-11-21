@@ -55,6 +55,7 @@
         m3-harness = import ./tests/m3-harness.nix { inherit self pkgs; };
         m4-task = import ./tests/m4-task.nix { inherit self pkgs; };
         m5-takeover = import ./tests/m5-takeover.nix { inherit self pkgs; };
+        m6-devcontainer = import ./tests/m6-devcontainer.nix { inherit self pkgs; };
       }
       // import ./tests/m1-storage.nix { inherit self pkgs disko; };
 

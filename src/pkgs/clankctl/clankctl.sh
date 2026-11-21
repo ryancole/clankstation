@@ -5,6 +5,8 @@
 #   CLANK_UID/GID     uid/gid of the clankstation user and the container agent
 #   CLANK_IMAGE       default Linux task image
 #   CLANK_TASK_RUN    in-container task runner script (store path)
+#   CLANK_BASH        bash from the Nix store, used to start the runner
+#   CLANK_AGENT_LAYER build context for the agent layer on devcontainer images
 #
 # Harness rule: clankctl never reads, copies or prints harness credentials.
 # Sign-in happens inside the container through the vendor's own flow, and
@@ -17,7 +19,10 @@ usage() {
 Usage: clankctl <command> [args]
 
 Projects:
-  project add <name> <git-url>   Mirror a git repository onto the box
+  project add [--template auto|linux-default] <name> <git-url>
+                                 Mirror a git repository onto the box. With "auto"
+                                 (the default), a repo with a devcontainer.json runs
+                                 in its own devcontainer; otherwise the default image
   project list                   List projects
 
 Tasks:
@@ -83,16 +88,31 @@ ensure_home_volume() {
 }
 
 require_image() {
-  docker image inspect "$CLANK_IMAGE" >/dev/null 2>&1 ||
-    die "image $CLANK_IMAGE is not built yet (see: systemctl status clankstation-image-linux-default)"
+  local image="${1:-$CLANK_IMAGE}"
+  docker image inspect "$image" >/dev/null 2>&1 || {
+    if [ "$image" = "$CLANK_IMAGE" ]; then
+      die "image $image is not built yet (see: systemctl status clankstation-image-linux-default)"
+    fi
+    die "image $image is missing"
+  }
+}
+
+# The image's own PATH, with the home volume's ~/.local/bin (harness
+# installs) in front.
+agent_path_for() {
+  local path
+  path=$(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" |
+    sed -n 's/^PATH=//p' | head -n 1)
+  printf '/home/agent/.local/bin:%s' "${path:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 }
 
 # Options shared by every container: run as agent, with the home volume.
+# Usage: container_opts [image]
 container_opts() {
   printf '%s\n' \
     --user "$CLANK_UID:$CLANK_GID" \
     --env HOME=/home/agent \
-    --env PATH=/home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    --env "PATH=$(agent_path_for "${1:-$CLANK_IMAGE}")" \
     --volume "$home_volume:/home/agent"
 }
 
@@ -173,8 +193,16 @@ cmd_shell() {
 cmd_project() {
   case "${1:-}" in
     add)
-      local name="${2:-}" url="${3:-}"
-      [ -n "$name" ] && [ -n "$url" ] || die "usage: clankctl project add <name> <git-url>"
+      shift
+      local template=auto
+      if [ "${1:-}" = --template ]; then
+        template="${2:-}"
+        shift 2 || true
+      fi
+      case "$template" in auto | linux-default) ;; *) die "templates: auto, linux-default" ;; esac
+      local name="${1:-}" url="${2:-}"
+      [ -n "$name" ] && [ -n "$url" ] ||
+        die "usage: clankctl project add [--template auto|linux-default] <name> <git-url>"
       valid_name "$name" || die "project names are lowercase letters, digits, - or _"
       local dir="$projects/$name"
       [ -e "$dir" ] && die "project $name already exists"
@@ -183,17 +211,18 @@ cmd_project() {
         rm -rf "$dir"
         die "could not clone $url"
       fi
-      printf 'url=%s\ntemplate=linux-default\n' "$url" >"$dir/project.env"
-      echo "Added project $name ($(git -C "$dir/mirror.git" symbolic-ref --short HEAD))"
+      printf 'url=%s\ntemplate=%s\n' "$url" "$template" >"$dir/project.env"
+      echo "Added project $name ($(git -C "$dir/mirror.git" symbolic-ref --short HEAD), template $template)"
       ;;
     list)
       local d
       for d in "$projects"/*/; do
         [ -f "$d/project.env" ] || continue
-        printf '%-20s %s\n' "$(basename "$d")" "$(kv "$d/project.env" url)"
+        printf '%-20s %-14s %s\n' "$(basename "$d")" "$(kv "$d/project.env" template)" \
+          "$(kv "$d/project.env" url)"
       done
       ;;
-    *) die "usage: clankctl project add <name> <git-url> | clankctl project list" ;;
+    *) die "usage: clankctl project add [--template auto|linux-default] <name> <git-url> | clankctl project list" ;;
   esac
 }
 
@@ -216,6 +245,8 @@ task_state() {
   local id="$1" t="$tasks/$1"
   if [ "$(docker inspect -f '{{.State.Running}}' "clank-$id" 2>/dev/null)" = true ]; then
     echo running
+  elif [ -f "$t/prepare.pid" ] && kill -0 "$(cat "$t/prepare.pid")" 2>/dev/null; then
+    echo preparing
   elif [ -f "$t/status.json" ]; then
     jq -r .state "$t/status.json"
   else
@@ -232,11 +263,16 @@ use_task_user() {
   home_volume="$CLANK_DATA/users/$user/home"
 }
 
+# The image a task runs in: its devcontainer image, or the default image.
+task_image() {
+  if [ -s "$tasks/$1/image" ]; then cat "$tasks/$1/image"; else printf '%s' "$CLANK_IMAGE"; fi
+}
+
 # docker run options for a task's environment. The container name defaults
 # to the task's own (clank-<id>), which is what marks a task as running.
 task_container_opts() {
   local id="$1" t="$tasks/$1" name="${2:-clank-$1}"
-  container_opts
+  container_opts "$(task_image "$id")"
   printf '%s\n' \
     --init \
     --stop-timeout 30 \
@@ -246,17 +282,135 @@ task_container_opts() {
     --volume "$t:/clank" \
     --volume "$t/worktree:/workspace" \
     --volume "$CLANK_TASK_RUN:/opt/clankstation/task-run:ro" \
+    --volume /nix/store:/nix/store:ro \
     --workdir /workspace
+  # A devcontainer's containerEnv. Values that still hold ${...} references
+  # are skipped: there is no devcontainer tooling here to resolve them.
+  if [ -f "$t/devcontainer.json" ]; then
+    jq -r '.containerEnv // {} | to_entries[] | select(.value | test("\\$\\{") | not)
+      | "--env", "\(.key)=\(.value)"' "$t/devcontainer.json"
+  fi
+}
+
+# Run the in-container runner (with the host's bash, through /nix/store).
+runner_cmd() {
+  printf '%s\n' "$CLANK_BASH" /opt/clankstation/task-run "$1"
 }
 
 # Start a headless turn. Detached and owned by dockerd, so it keeps running
 # after the SSH session (and clankctl) exit.
 start_task() {
-  local id="$1" opts
+  local id="$1" opts cmd image
   use_task_user "$id"
+  image=$(task_image "$id")
+  require_image "$image"
   mapfile -t opts < <(task_container_opts "$id")
-  docker run --detach --rm "${opts[@]}" "$CLANK_IMAGE" \
-    bash /opt/clankstation/task-run headless >/dev/null
+  mapfile -t cmd < <(runner_cmd headless)
+  docker run --detach --rm "${opts[@]}" "$image" "${cmd[@]}" >/dev/null
+}
+
+# Mark a task failed before it ever ran (for example, its environment didn't build).
+fail_task() {
+  local t="$tasks/$1"
+  mkdir -p "$t/result"
+  printf '%s\n' "$2" >"$t/result/summary.md"
+  jq -n --arg error "$2" --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{state: "failed", mode: "prepare", exit_code: 1, session_id: "", error: $error, finished: $finished}' \
+    >"$t/status.json"
+}
+
+# ---- devcontainers -------------------------------------------------------------
+
+devcontainer_config() {
+  local wt="$1"
+  if [ -f "$wt/.devcontainer/devcontainer.json" ]; then
+    echo .devcontainer/devcontainer.json
+  elif [ -f "$wt/.devcontainer.json" ]; then
+    echo .devcontainer.json
+  fi
+}
+
+# Build (or reuse) the project's devcontainer image for task $1, then write
+# $t/image and $t/devcontainer.json (merged metadata for the runner).
+# Output goes to $t/prepare.log.
+prepare_devcontainer() {
+  local id="$1" t="$tasks/$1" wt="$tasks/$1/worktree" project config hash tag
+  project=$(kv "$t/task.env" project)
+  config=$(devcontainer_config "$wt")
+  # The devcontainers CLI keeps its own state under HOME.
+  export HOME="$CLANK_DATA/cache/devcontainer-home"
+  mkdir -p "$HOME"
+
+  local read
+  read=$(devcontainer read-configuration --workspace-folder "$wt" --log-level info 2>>"$t/prepare.log") || {
+    fail_task "$id" "could not read $config (see prepare.log)"
+    return 1
+  }
+  if jq -e '.configuration.dockerComposeFile' >/dev/null <<<"$read"; then
+    fail_task "$id" "docker compose devcontainers are not supported yet ($config)"
+    return 1
+  fi
+
+  # The image is reused while the devcontainer files are unchanged.
+  hash=$(
+    cd "$wt" && {
+      find .devcontainer -type f -print0 2>/dev/null | sort -z | xargs -0r sha256sum
+      if [ -f .devcontainer.json ]; then sha256sum .devcontainer.json; fi
+      find "$CLANK_AGENT_LAYER" -type f -print0 | sort -z | xargs -0r sha256sum
+      echo "$CLANK_UID:$CLANK_GID"
+    } | sha256sum | cut -c1-12
+  )
+  tag="clankstation/dc-$project:$hash"
+
+  if ! docker image inspect "$tag" >/dev/null 2>&1; then
+    echo "== devcontainer build ($config)" >>"$t/prepare.log"
+    devcontainer build --workspace-folder "$wt" --image-name "$tag-base" \
+      >>"$t/prepare.log" 2>&1 || {
+      fail_task "$id" "devcontainer build failed (see prepare.log)"
+      return 1
+    }
+    local remote_user
+    remote_user=$(docker image inspect -f '{{index .Config.Labels "devcontainer.metadata"}}' "$tag-base" |
+      jq -r 'map(.remoteUser // .containerUser // empty) | last // ""')
+    echo "== agent layer (remoteUser: ${remote_user:-none})" >>"$t/prepare.log"
+    docker build --tag "$tag" \
+      --build-arg BASE="$tag-base" \
+      --build-arg REMOTE_USER="$remote_user" \
+      --build-arg AGENT_UID="$CLANK_UID" \
+      --build-arg AGENT_GID="$CLANK_GID" \
+      "$CLANK_AGENT_LAYER" >>"$t/prepare.log" 2>&1 || {
+      fail_task "$id" "could not add the agent user to the devcontainer image (see prepare.log)"
+      return 1
+    }
+  fi
+
+  # Merge the metadata fragments (features first, then the project's config)
+  # the way the devcontainer spec does: last remoteUser wins, containerEnv
+  # merges, lifecycle hooks run in order.
+  docker image inspect -f '{{index .Config.Labels "devcontainer.metadata"}}' "$tag" | jq '
+    def hook(h): map(.[h] // empty);
+    {
+      remoteUser: (map(.remoteUser // empty) | last),
+      containerEnv: (map(.containerEnv // {}) | add // {}),
+      onCreateCommand: hook("onCreateCommand"),
+      updateContentCommand: hook("updateContentCommand"),
+      postCreateCommand: hook("postCreateCommand"),
+      postStartCommand: hook("postStartCommand")
+    }' >"$t/devcontainer.json"
+  printf '%s\n' "$tag" >"$t/image"
+}
+
+# Background half of `clankctl run` for devcontainer tasks: build the image,
+# then start the task. Detached from the terminal, so it survives SSH
+# disconnects.
+cmd_prepare() {
+  local id="$1" t
+  t=$(task_dir "$id")
+  echo "$$" >"$t/prepare.pid"
+  if prepare_devcontainer "$id"; then
+    start_task "$id" || fail_task "$id" "could not start the task container"
+  fi
+  rm -f "$t/prepare.pid"
 }
 
 # Record each turn's prompt, so a task's history survives later turns.
@@ -269,8 +423,10 @@ log_turn() {
 }
 
 require_not_running() {
-  [ "$(task_state "$1")" != running ] ||
-    die "task $1 is still running (see: clankctl logs -f $1, or clankctl attach $1)"
+  case "$(task_state "$1")" in
+    running) die "task $1 is still running (see: clankctl logs -f $1, or clankctl attach $1)" ;;
+    preparing) die "task $1 is still preparing its environment (see: $tasks/$1/prepare.log)" ;;
+  esac
 }
 
 session_of() {
@@ -293,7 +449,6 @@ cmd_run() {
   local claude_bin="$home_volume/.local/bin/claude"
   [ -L "$claude_bin" ] || [ -x "$claude_bin" ] ||
     die "Claude Code is not installed (run: clankctl harness enable claude)"
-  require_image
 
   git -C "$mirror" remote update --prune >/dev/null 2>&1 ||
     echo "clankctl: warning: could not fetch $name; using the copy on the box" >&2
@@ -317,9 +472,23 @@ cmd_run() {
   git -C "$t/worktree" remote set-url origin "$(kv "$dir/project.env" url)"
   git -C "$t/worktree" switch --quiet --create "clank/$id"
 
-  start_task "$id"
-  echo "$id"
-  echo "Started. Check on it with: clankctl status   (or: clankctl show $id)" >&2
+  local template config
+  template=$(kv "$dir/project.env" template)
+  config=$(devcontainer_config "$t/worktree")
+  if [ "${template:-auto}" = auto ] && [ -n "$config" ]; then
+    # Building a devcontainer image can take minutes, so it runs in the
+    # background, detached from this terminal; the task starts when it's done.
+    echo "env=devcontainer" >>"$t/task.env"
+    setsid "$0" _prepare "$id" >>"$t/prepare.log" 2>&1 </dev/null &
+    echo "$!" >"$t/prepare.pid"
+    echo "$id"
+    echo "Preparing the devcontainer ($config), then starting. Check on it with: clankctl status" >&2
+  else
+    echo "env=linux-default" >>"$t/task.env"
+    start_task "$id"
+    echo "$id"
+    echo "Started. Check on it with: clankctl status   (or: clankctl show $id)" >&2
+  fi
 }
 
 cmd_status() {
@@ -341,6 +510,7 @@ cmd_show() {
   echo "Task:    $id"
   echo "Project: $(kv "$t/task.env" project) ($(kv "$t/task.env" branch) @ $(kv "$t/task.env" base | cut -c1-12))"
   echo "Created: $(kv "$t/task.env" created)"
+  echo "Env:     $(kv "$t/task.env" env) ($(task_image "$id"))"
   echo "State:   $state"
   if [ -f "$t/status.json" ]; then
     echo "Session: $(jq -r .session_id "$t/status.json")"
@@ -377,7 +547,7 @@ cmd_resume() {
   require_not_running "$id"
   sid=$(session_of "$id")
   if [ "$prompt" = - ]; then prompt=$(cat); fi
-  require_image
+  require_image "$(task_image "$id")"
   printf '%s\n' "$prompt" >"$t/prompt.txt"
   printf '%s\n' "$sid" >"$t/resume"
   rm -f "$t/status.json"
@@ -405,9 +575,10 @@ cmd_stop() {
 cmd_attach() {
   local yes=false
   if [ "${1:-}" = --yes ]; then yes=true; shift; fi
-  local id="${1:-}" t opts tty=(-i)
+  local id="${1:-}" t opts cmd image tty=(-i)
   [ -n "$id" ] || die "usage: clankctl attach [--yes] <task-id>"
   t=$(task_dir "$id")
+  [ "$(task_state "$id")" != preparing ] || die "task $id is still preparing its environment"
   if [ "$(task_state "$id")" = running ]; then
     if [ "$yes" != true ]; then
       [ -t 0 ] || die "task $id is running; pass --yes to stop its headless run and take over"
@@ -419,15 +590,16 @@ cmd_attach() {
   fi
   local sid
   sid=$(session_of "$id")
-  require_image
+  image=$(task_image "$id")
+  require_image "$image"
   use_task_user "$id"
   printf '%s\n' "$sid" >"$t/resume"
   log_turn "$id" attach
   mapfile -t opts < <(task_container_opts "$id")
+  mapfile -t cmd < <(runner_cmd interactive)
   if [ -t 0 ] && [ -t 1 ]; then tty+=(-t); fi
   echo "Opening session $sid. Exit Claude Code (/exit) to hand the task back." >&2
-  docker run --rm "${tty[@]}" "${opts[@]}" "$CLANK_IMAGE" \
-    bash /opt/clankstation/task-run interactive
+  docker run --rm "${tty[@]}" "${opts[@]}" "$image" "${cmd[@]}"
   echo "$id: $(task_state "$id")" >&2
 }
 
@@ -473,16 +645,19 @@ task_shell() {
   if [ "$(task_state "$id")" = running ]; then
     docker exec "${tty[@]}" --user "$CLANK_UID:$CLANK_GID" --workdir /workspace "clank-$id" "$@"
   else
-    require_image
+    local image
+    image=$(task_image "$id")
+    require_image "$image"
     use_task_user "$id"
     # Not the task's own container name: a side shell doesn't make the task
     # look running.
     mapfile -t opts < <(task_container_opts "$id" "clank-$id-shell")
-    docker run --rm "${tty[@]}" "${opts[@]}" "$CLANK_IMAGE" "$@"
+    docker run --rm "${tty[@]}" "${opts[@]}" "$image" "$@"
   fi
 }
 
 case "${1:-}" in
+  _prepare) shift; cmd_prepare "$@" ;;
   resume) shift; cmd_resume "$@" ;;
   stop) shift; cmd_stop "$@" ;;
   attach) shift; cmd_attach "$@" ;;

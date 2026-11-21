@@ -23,8 +23,11 @@ web stack.
 
 - Use the latest stable release of everything. nixpkgs is pinned to the current
   stable NixOS branch (`nixos-26.05`; move to `nixos-26.11` once it is released).
-  Other inputs and tools use their latest stable release, never an older one
-  without a stated reason.
+- Packages come from that pinned nixpkgs as shipped (e.g. Docker 29.9, devcontainers
+  CLI 0.87), even when upstream is newer. "Latest stable" means the latest stable
+  NixOS release, so versions move with nixpkgs bumps. No overlays to newer upstream
+  versions without asking. Flake inputs that aren't nixpkgs (e.g. disko) use their
+  latest release tag. Container base images use the latest stable/LTS tag.
 - Check every NixOS option name and package attribute against the **pinned**
   nixpkgs, not memory. For example, fetch the locked source and grep it:
   `nix flake prefetch github:NixOS/nixpkgs/<rev> --json` gives a store path,

@@ -38,6 +38,8 @@ broad permissions inside their environment.
 | Area | Decision | Status |
 |---|---|---|
 | Base OS | NixOS, flake, nixpkgs pinned to `nixos-26.05` (move to 26.11 when it is released) | Settled |
+| Package versions | As shipped by the pinned stable nixpkgs (e.g. Docker 29.9, devcontainers CLI 0.87), even when upstream is newer; no overlays to newer versions | Settled (M6) |
+| devcontainers | `devcontainer build` + agent layer; tasks run via Clankstation's own runner, not `devcontainer up` | Settled (M6) |
 | Kernel | `linuxPackages_latest` (latest stable kernel, per principle 2). One line to revert to the default LTS kernel | Settled (by principle) |
 | Linux environments | Docker (rootful, `virtualisation.docker`, Docker 29.x) | Settled |
 | Windows environments | QEMU/KVM through libvirt, with a copy-on-write qcow2 overlay per task on a prepared base image | Settled (from brief) |
@@ -144,6 +146,8 @@ Directory tree, created with `systemd.tmpfiles`:
     worktree/                 the task's own local clone, on branch clank/<task-id>
     events.jsonl, stderr.log  raw harness stream-json events and stderr (all turns)
     status.json               state (done/failed/stopped), mode, exit code, session id, times
+    image, devcontainer.json  devcontainer tasks: image tag, merged metadata
+    prepare.log, lifecycle.log  devcontainer build and lifecycle command output
     result/                   summary.md, diff.patch, diffstat.txt
   users/<user>/
     home/                     per-user home volume, mounted as /home/agent in every
@@ -187,8 +191,31 @@ bare-metal instances or the newer types that allow nested virtualization.
   when it's missing, tagged by a hash of the Dockerfile and uid/gid plus
   `:latest`, so a changed Dockerfile gets rebuilt. It needs network access,
   so it retries every minute until it succeeds and never holds up boot.
-- **devcontainer.json**: when a repo has one, build and start the environment
-  with the devcontainers CLI (latest release), then add Clankstation's mounts.
+- **devcontainer.json** (M6): with the project template `auto` (the default),
+  a repo with `.devcontainer/devcontainer.json` or `.devcontainer.json` runs in
+  its own devcontainer. `--template linux-default` opts out.
+  - **Build:** `devcontainer build` (devcontainers CLI from nixpkgs) builds the
+    image, features included. An agent layer (`src/images/devcontainer-agent`)
+    then remaps the config's `remoteUser` to uid/gid 2000, the same idea as the
+    CLI's `updateRemoteUserUID`. If `remoteUser` is root or unset, it adds an
+    `agent` user instead. The image is tagged `clankstation/dc-<project>:<hash>`,
+    where the hash covers the devcontainer files and the agent layer, so it is
+    reused until those change.
+  - **Prepare step:** the build runs in the background after `clankctl run`
+    returns (state `preparing`, log in `prepare.log`), then the task starts.
+  - **Running:** tasks don't use `devcontainer up`. They keep Clankstation's
+    model of one `--rm` container per turn, running the runner. The merged
+    image metadata (`devcontainer.metadata` label) gives `remoteUser`,
+    `containerEnv` (passed as `--env`) and the lifecycle hooks. The runner runs
+    `onCreate`/`updateContent`/`postCreate` once per task and `postStart` on
+    every turn, logging to `lifecycle.log`. A failure is logged and the task
+    carries on, like an editor does.
+  - **Not supported yet:** docker compose configs (refused with a message),
+    `runArgs`, `mounts`, `capAdd`/`privileged`, `forwardPorts`, `remoteEnv`,
+    `${...}` values in `containerEnv`, and non-default config paths
+    (`.devcontainer/<name>/devcontainer.json`). The workspace is always
+    `/workspace`, not `/workspaces/<repo>`. The image hash doesn't see build
+    context files outside `.devcontainer/`.
 - Mounts per task: the task worktree at `/workspace`, and the user's home
   volume at `/home/agent` (5.7).
 - One container per task, removed when the task ends. The worktree and results
@@ -275,6 +302,10 @@ How this works for Claude Code:
   the harness, then writes the summary (the final `result` event), the session
   id (the `init` event), the diff and `status.json`. It is the first, shell-only
   form of the per-environment worker. Events go to `tasks/<id>/events.jsonl`.
+  The runner's own tools (bash, coreutils, git, jq) come from the host's
+  `/nix/store`, bind-mounted read-only, so it works in any image. The harness
+  and lifecycle commands run with the image's own `PATH`, with
+  `/home/agent/.local/bin` in front.
 - **Keep going / answer a question:** `clankctl resume <task> "<reply>"` starts
   a new headless turn with `--resume <session-id>` on the same worktree. Events
   are appended, the summary is that turn's result, and the diff stays
