@@ -53,6 +53,7 @@ pkgs.testers.runNixOSTest {
       virtualisation.memorySize = 2048;
       systemd.timers.clankstation-image-linux-default.enable = lib.mkForce false;
       clankstation.web.enable = true;
+      clankstation.web.devListen = "127.0.0.1:8080";
       environment.systemPackages = [ pkgs.curl ];
     };
 

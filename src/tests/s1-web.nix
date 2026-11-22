@@ -7,9 +7,6 @@
 # The real run is checked in the dev VM.
 { self, pkgs }:
 let
-  # The appliance never enables the service before login exists (S5).
-  appliance = self.nixosConfigurations.clankstation.config;
-
   testImage = pkgs.dockerTools.buildLayeredImage {
     name = "clankstation/linux-default";
     tag = "latest";
@@ -39,7 +36,6 @@ let
     echo '{"type":"result","subtype":"success","is_error":false,"result":"Added contact.txt.\n\nShould it go to info@ or to you?","session_id":"stub-session-1","total_cost_usd":0.01,"duration_ms":20000}'
   '';
 in
-assert !appliance.clankstation.web.enable;
 pkgs.testers.runNixOSTest {
   name = "s1-web";
 
@@ -54,6 +50,7 @@ pkgs.testers.runNixOSTest {
       virtualisation.memorySize = 2048;
       systemd.timers.clankstation-image-linux-default.enable = lib.mkForce false;
       clankstation.web.enable = true;
+      clankstation.web.devListen = "127.0.0.1:8080";
       environment.systemPackages = [ pkgs.curl ];
     };
 

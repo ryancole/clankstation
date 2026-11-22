@@ -18,6 +18,7 @@ let
         ./ui/package-lock.json
         ./ui/index.html
         ./ui/vite.config.js
+        ./ui/public
         ./ui/src
       ];
     };

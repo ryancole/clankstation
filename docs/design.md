@@ -58,6 +58,9 @@ broad permissions inside their environment.
 | Sign-in from the browser | Settings' **Sign in** opens a browser terminal running Claude's own `claude auth login`. The one-time code the user pastes passes through `clank-web`'s WebSocket to Claude Code, relayed only: never logged, stored or read, as SSH relays it for `clankctl login claude` | Settled (2026-11-22) |
 | Go dependencies | `clank-web` may use outside Go modules, pinned in `go.sum` (not flake inputs). First two, for the browser terminal (S3): `creack/pty` and `coder/websocket` | Settled (2026-11-22) |
 | Queue and concurrency (S4) | The queue lives in `clankctl`, shared by the CLI and the web app: `run` and `resume` mark a task `queued` (a file in its task folder) when the box is at its limit, and a small systemd service starts the next one when a slot frees, so it keeps working while `clank-web` restarts. The limit is runtime state under `/var/lib/clankstation`, default 1. Nothing jumps the line or interrupts a run. **Take over is removed from the app for now** (the S3 terminal stays for Settings' install and sign-in; `clankctl attach` over SSH still works) | Settled (2026-11-22) |
+| Login (S5) | Tailscale identity: the app is reachable only over Tailscale, and `clank-web` asks the local `tailscaled` who each connecting device belongs to (whois). Reaching the box on the tailnet, as Tailscale's own access rules allow, is the login; no Clankstation passwords | Settled (2026-11-22) |
+| Joining Tailscale (S5) | A first-run page on `http://clankstation.local` (plain HTTP, setup only) shows Tailscale's own sign-in link; once the box has joined, it sends you to its `https://…ts.net` address. The box never handles Tailscale credentials | Settled (2026-11-22) |
+| Where the app is served (S5) | HTTPS on the box's `*.ts.net` name only, at home and away. Plain HTTP on the LAN serves only the first-run page, or a link to the `ts.net` address | Settled (2026-11-22) |
 | HTTPS and remote access | Default: Tailscale (`services.tailscale` from nixpkgs, no new flake input). The app is served at the box's `*.ts.net` name with Tailscale's Let's Encrypt certificate, the same name at home and away (the PWA, service worker and push subscriptions are tied to one origin). The owner signs in to Tailscale through its own flow. Alternative, documented: the owner's own domain with an ACME DNS-01 certificate (`security.acme`), where the owner handles reachability (port forward, split DNS). LAN-only fallback: a box-local CA, name-constrained to the box, installed per device (also used on the dev VM). Not offered: tunnel services that terminate TLS (they would see the terminal during harness sign-in). Reachable from outside the home means the GUI always requires a household login | Settled (2026-11-21) |
 
 ## 4. Architecture
@@ -118,7 +121,8 @@ Flakes only see git-tracked files. New files must be `git add`ed (or
 - Hostname `clankstation`. Avahi publishes `clankstation.local`
   (`services.avahi.enable`, `nssmdns4`, `publish.enable`, `publish.addresses`).
 - OpenSSH for administration and for `clankctl` in the OS phase.
-- Firewall on. Only SSH (and later the GUI port) is open on the LAN. Docker and
+- Firewall on. Only SSH and HTTP (port 80, the first-run page) are open on the
+  LAN; the app's HTTPS port 443 is open on `tailscale0` only (S5). Docker and
   libvirt bridges are internal.
 - Nix: flakes on, automatic store GC and optimisation on a timer.
 - One admin login account in the OS phase. The household user account is part
@@ -548,8 +552,38 @@ and taken out of the app in S4 (decisions table): nothing interrupts a run
 or skips the line.
 Settings reads Claude's state from `clankctl harness status` and passes on
 only installed, version, signed in, method and plan (not the account's email
-or organization). Off by default; the dev VM enables it on port 8080,
-forwarded to `http://localhost:8080` in WSL (and Windows).
+or organization).
+
+Tailscale (S5, `tailscale.go`, `setup.go`; module `src/modules/web.nix`,
+enabled on the appliance): `services.tailscale` runs on the box with
+`permitCertUid` set to the service user (so `clank-web` can fetch the
+ts.net certificate) and `--operator=clankstation` (so it can start
+Tailscale's sign-in). `clank-web` talks to tailscaled's LocalAPI on its Unix
+socket (standard library only): `status`, `whois`, `cert/<name>`,
+`login-interactive` and `prefs`. Listeners:
+
+- `-https :443`: the app, with the ts.net certificate (kept until two weeks
+  before it expires). It is fetched in the background with a 5-minute
+  limit: the first one has Tailscale set a DNS record for Let's Encrypt,
+  which took 34 s on the dev VM, and the first-run page says it's on its
+  way meanwhile. Every request is checked with `whois`; a device
+  Tailscale can't name gets a "This device can't use Clankstation" page.
+  `GET /api/me` returns the Tailscale login, name and device.
+- `-setup :80`: the first-run page at `http://clankstation.local`: **Connect
+  to Tailscale** (only while the box isn't connected) shows Tailscale's own
+  sign-in link, then asks to turn on HTTPS certificates in the Tailscale
+  admin console if needed, then links to `https://<name>.ts.net`. A device
+  already on the tailnet is redirected there.
+- `-listen`: the app over plain HTTP with no login, dev VM only
+  (`clankstation.web.devListen`): `http://localhost:8080` in WSL and
+  Windows; the first-run page is forwarded to `http://localhost:8081`. The
+  dev VM keeps Tailscale's state on its data disk, so it stays on its tailnet
+  across runs.
+
+The app is installable (web app manifest, icons, a service worker that
+caches nothing; push comes in S6). Pages use `Referrer-Policy: same-origin`:
+under `no-referrer` browsers send `Origin: null` on form posts, which the
+cross-site check refuses.
 
 ### 8.1 Milestones (service layer)
 
@@ -561,7 +595,7 @@ Each is verified on the dev VM (and a NixOS VM test where it fits).
 | S2 | Actions: new task, reply, stop, projects (through `clankctl`) | A task can be queued and continued from the browser alone. Done: `s2-actions` VM test (add project, new task, answer, stop and keep going, continue a lost task, cross-site refusal); on the dev VM a real Claude Code task was started from New task, asked its question, and finished after a reply sent from the task page |
 | S3 | Browser terminal: take over (WebSocket + PTY), Claude install and sign-in from Settings | Take over and hand back work from the browser. Done: `s3-terminal` VM test (take over a working task, leave and reconnect, hand back with the diff refreshed, sign-in code not in the service's log, Claude status without the email); on the dev VM, real Claude Code was taken over mid-task from the browser, given an instruction, and handed back with its file in the changes |
 | S4 | Queue and concurrency limit (`queued` state); take-over out of the app | With a limit of 1, a second task waits, then starts on its own. Done: `s4-queue` VM test (line order, take out of line and start later, replies wait, CLI and web share one line, a limit of 2 runs two) and the full `nix flake check`; on the dev VM two real Claude Code tasks were queued and the second started by itself when the first finished |
-| S5 | Login, Tailscale, HTTPS, installable PWA | Installed on a phone, reachable away from home, login required |
+| S5 | Login, Tailscale, HTTPS, installable PWA | Installed on a phone, reachable away from home, login required. So far: `s5-tailnet` VM test (real tailscaled on the box and a "phone" with Headscale: first-run page before and after joining, the phone gets in as its Tailscale user, the box's own loopback and a LAN device are refused); on the dev VM (2026-11-22), the real flow: first-run page, Tailscale sign-in, HTTPS enabled in the admin console, a Let's Encrypt certificate for its ts.net name, and the app opened and installed on a phone over Tailscale. Still to check: the same on the Hyper-V box |
 | S6 | Web push | The phone gets "Done" and "Claude has a question" |
 | S7 | Box settings: updates, storage | "Update now" works from the GUI |
 

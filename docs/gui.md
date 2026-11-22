@@ -136,6 +136,8 @@ add`; a failed clone shows git's message under "Details".
 
 ### 3.7 Settings
 
+- **You (S5):** your name and Tailscale login, and which device you're on.
+  "Your Tailscale account is your Clankstation login."
 - **Claude:** installed version and whether it's signed in (`claude auth
   status`). **Set up Claude** (installs it, `clankctl harness enable claude`)
   and **Sign in**, which opens a browser terminal running Claude's own sign-in
@@ -209,8 +211,11 @@ Home ──New task──> New task ──Start──> Task page (Getting ready 
 - **Wait your turn:** a task started while another works shows *Waiting in
   line* with its place, and starts by itself. **Take it out of line** stops
   it before it runs; a reply later starts it.
-- **First run** (after install, later): open `clankstation.local` → name
-  yourself → Set up Claude → Sign in → add a project → first task.
+- **First run** (S5): open `http://clankstation.local` → **Connect to
+  Tailscale** → sign in on Tailscale's site → (if asked) turn on HTTPS in the
+  Tailscale admin console → **Open Clankstation** at `https://<name>.ts.net`
+  → install it to the home screen → Settings → Set up Claude → Sign in → add
+  a project → first task. Each device also needs the Tailscale app.
 
 ## 7. Not on day one
 

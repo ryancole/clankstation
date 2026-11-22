@@ -85,3 +85,5 @@ export async function getClaude() {
   if (!r.ok) throw new Error(data?.error ?? "Couldn't check Claude on the box.");
   return data;
 }
+
+export const getMe = () => getJSON('/api/me');

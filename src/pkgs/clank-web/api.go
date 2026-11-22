@@ -16,6 +16,8 @@ package main
 //   POST /api/tasks/{id}/stop
 //   POST /api/projects           {name, url}
 //
+// Who you are (S5): GET /api/me  {login, name, node} from Tailscale
+//
 // Terminals and Claude (S3):
 //   GET /api/claude              Claude Code installed / signed in (claude.go)
 //   GET /api/terminals           open terminal sessions [{kind, task}]
@@ -44,6 +46,9 @@ func newServer(s *Store, c *Clankctl, ui fs.FS) http.Handler {
 	terms := NewTerminals(c, func(kind, task string) {
 		s.invalidate()
 		claude.invalidate()
+	})
+	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, identityFrom(r.Context()))
 	})
 	mux.HandleFunc("GET /api/claude", func(w http.ResponseWriter, r *http.Request) {
 		st, err := claude.get(r.Context(), c)
@@ -229,7 +234,7 @@ func redactURL(s string) string { return urlUserinfo.ReplaceAllString(s, "://") 
 func securityHeaders(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Referrer-Policy", "same-origin") // "no-referrer" makes form posts send Origin: null
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'")
 		h.ServeHTTP(w, r)

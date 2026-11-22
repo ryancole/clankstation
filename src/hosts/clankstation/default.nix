@@ -22,6 +22,9 @@
   # these fixed names at the disks you choose, so the prebuilt system and
   # disko script on the ISO work for any machine. After install, filesystems
   # are mounted by partition label. The one-disk variant sets dataDisk = null.
+  # The web app over Tailscale, and the first-run page on the LAN (S5).
+  clankstation.web.enable = true;
+
   clankstation.storage = {
     bootDisk = lib.mkDefault "/dev/clank-boot";
     dataDisk = lib.mkDefault "/dev/clank-data";

@@ -1,13 +1,17 @@
 <script>
-  import { getClaude } from '../lib/api.js';
+  import { getClaude, getMe } from '../lib/api.js';
 
   let claude = $state(null);
   let error = $state('');
+  let me = $state(null);
 
   $effect(() => {
     getClaude()
       .then((c) => (claude = c))
       .catch((e) => (error = e.message));
+    getMe()
+      .then((m) => (me = m))
+      .catch(() => {});
   });
 
   const PLANS = { pro: 'Pro', max: 'Max', team: 'Team', enterprise: 'Enterprise' };
@@ -20,6 +24,19 @@
     </a>
     <h1>Settings</h1>
   </div>
+
+  {#if me}
+    <h2 class="section-title">You</h2>
+    <div class="card group">
+      <div class="row">
+        <span class="text">
+          <span class="label">{me.name || me.login}</span>
+          <span class="muted small">{me.login === 'dev' ? 'No login on the dev VM' : `${me.login} · on ${me.node}`}</span>
+        </span>
+      </div>
+    </div>
+    <p class="note muted small">Your Tailscale account is your Clankstation login.</p>
+  {/if}
 
   <h2 class="section-title">Claude</h2>
   <div class="card group">

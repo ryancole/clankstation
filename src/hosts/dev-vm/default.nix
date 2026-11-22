@@ -21,14 +21,21 @@ in
 {
   clankstation.storage.dataDisk = "/dev/vdb";
 
-  # The web service (S1, no login yet): dev VM only. From the WSL side:
-  # http://localhost:8080 (also from Windows, through WSL's localhost
-  # forwarding).
-  clankstation.web = {
-    enable = true;
-    address = "0.0.0.0";
-    openFirewall = true;
-  };
+  # The web app with NO login on port 8080, for development: from the WSL
+  # side (and Windows, through WSL's localhost forwarding)
+  # http://localhost:8080. The first-run page (port 80) is at
+  # http://localhost:8081. Once the dev VM has joined a tailnet, the real
+  # thing is at https://<name>.ts.net from devices on it.
+  clankstation.web.devListen = "0.0.0.0:8080";
+  networking.firewall.allowedTCPPorts = [ 8080 ];
+
+  # The root disk is fresh on every run; keep Tailscale's identity on the
+  # persistent data disk, so the dev VM stays on its tailnet.
+  systemd.tmpfiles.rules = [ "d /var/lib/clankstation/dev-tailscale 0700 root root -" ];
+  systemd.services.tailscaled.serviceConfig.BindPaths = [
+    "/var/lib/clankstation/dev-tailscale:/var/lib/tailscale"
+  ];
+  systemd.services.tailscaled.unitConfig.RequiresMountsFor = [ "/var/lib/clankstation" ];
 
   virtualisation.vmVariantWithDisko = {
     disko.devices.disk = {
@@ -51,6 +58,11 @@ in
           from = "host";
           host.port = 8080;
           guest.port = 8080;
+        }
+        {
+          from = "host";
+          host.port = 8081;
+          guest.port = 80;
         }
       ];
     };
