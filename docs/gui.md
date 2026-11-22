@@ -150,7 +150,9 @@ add`; a failed clone shows git's message under "Details".
 - **Notifications (S6, under "This device"):** Turn on / Turn off for this
   device, and **Test** once on. On iPhone in Safari (not installed), a note
   to add Clankstation to the home screen first, since iPhones only offer
-  notifications to installed web apps.
+  notifications to installed web apps. If a test doesn't show up, it may be
+  hidden by a Focus mode (Sleep, Do Not Disturb), or by iOS while the app
+  is open on screen: it's in Notification Center.
 - **Install the app:** instructions for this browser (Add to Home Screen /
   Install).
 - **The box (S7):** current version, **Check for updates**, **Update now**
