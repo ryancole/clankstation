@@ -70,6 +70,8 @@ func termArgs(kind, task string) ([]string, bool) {
 		return []string{"login", "claude"}, true
 	case "install":
 		return []string{"harness", "enable", "claude"}, true
+	case "github": // GitHub's own device sign-in (S10)
+		return []string{"login", "github"}, true
 	}
 	return nil, false
 }

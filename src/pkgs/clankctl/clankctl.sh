@@ -6,6 +6,7 @@
 #   CLANK_IMAGE       default Linux task image
 #   CLANK_TASK_RUN    in-container task runner script (store path)
 #   CLANK_BASH        bash from the Nix store, used to start the runner
+#   CLANK_GH          GitHub's CLI (gh) from the Nix store, run inside containers
 #   CLANK_AGENT_LAYER build context for the agent layer on devcontainer images
 #   CLANK_WINDOWS_TEMPLATES  Autounattend.xml, setup.ps1, build-domain.xml
 #   CLANK_VIRTIO_WIN  virtio-win drivers and guest tools (unpacked)
@@ -26,6 +27,10 @@ Projects:
                                  (the default), a repo with a devcontainer.json runs
                                  in its own devcontainer; otherwise the default image
   project list                   List projects
+  project set <name> pull-requests on|off
+                                 Open a draft pull request on GitHub for each task,
+                                 pushed to after every turn (default: on for GitHub
+                                 projects; needs: clankctl login github)
 
 Tasks:
   run <project> <prompt>         Start a headless task (prompt "-" reads stdin); it
@@ -51,6 +56,11 @@ Harness (per-user, opt-in):
   harness enable claude          Install Claude Code into your home volume (official installer)
   harness status                 Show installed harnesses and whether you are signed in
   login claude                   Sign in to Claude Code (vendor's own sign-in flow)
+
+GitHub (per-user, for pull requests):
+  login github                   Sign in to GitHub (GitHub's own device sign-in, gh)
+  github status                  Whether you are signed in, and as whom (JSON)
+  pr refresh <task-id>           Check a task's pull request on GitHub (merged, closed...)
 
 Environments:
   shell [cmd...]                 Open a shell (or run cmd) in the default Linux image
@@ -237,10 +247,53 @@ cmd_harness() {
 }
 
 cmd_login() {
-  [ "${1:-}" = claude ] || die "usage: clankctl login claude"
-  env_run -- sh -c 'command -v claude >/dev/null 2>&1' ||
-    die "Claude Code is not installed (run: clankctl harness enable claude)"
-  env_run -- claude auth login
+  case "${1:-}" in
+    claude)
+      env_run -- sh -c 'command -v claude >/dev/null 2>&1' ||
+        die "Claude Code is not installed (run: clankctl harness enable claude)"
+      env_run -- claude auth login
+      ;;
+    github)
+      # GitHub's own device sign-in: it shows a code to enter at
+      # github.com/login/device. gh keeps its token in the home volume
+      # (~/.config/gh), which clankctl never reads. No keyboard (stdin from
+      # /dev/null): gh then asks nothing, in particular not to set itself up
+      # as git's credential helper in ~/.gitconfig (with a /nix/store path
+      # that an update removes); the runner uses it for its push only.
+      init_home
+      env_run --volume /nix/store:/nix/store:ro -- sh -c '"$0" auth login --hostname github.com \
+        --git-protocol https --web --clipboard=false --insecure-storage </dev/null' "$CLANK_GH"
+      ;;
+    *) die "usage: clankctl login claude | clankctl login github" ;;
+  esac
+}
+
+# A task's pull request as GitHub has it now (merged, closed, ...): gh pr
+# view in a container with the task user's sign-in, into result/pr.json.
+cmd_pr() {
+  local id="${2:-}" t number url state
+  if [ "${1:-}" != refresh ] || [ -z "$id" ]; then die "usage: clankctl pr refresh <task-id>"; fi
+  t=$(task_dir "$id")
+  number=$(jq -r '.number // empty' "$t/result/pr.json" 2>/dev/null || true)
+  [ -n "$number" ] || die "task $id has no pull request"
+  use_task_user "$id"
+  url=$(kv "$projects/$(kv "$t/task.env" project)/project.env" url)
+  state=$(env_run --interactive=false --tty=false --volume /nix/store:/nix/store:ro -- sh -c \
+    'gh=$(command -v gh || echo "$1"); GH_PROMPT_DISABLED=1 "$gh" pr view "$2" --repo "$3" --json number,url,state,isDraft' \
+    sh "$CLANK_GH" "$number" "$url" 2>/dev/null) || die "couldn't check pull request #$number on GitHub"
+  jq -e .number >/dev/null 2>&1 <<<"$state" || die "couldn't check pull request #$number on GitHub"
+  jq --argjson now "$state" '. + $now' "$t/result/pr.json" >"$t/result/pr.json.new"
+  mv "$t/result/pr.json.new" "$t/result/pr.json"
+  jq -r '"#\(.number) \(.state)\(if .isDraft then " (draft)" else "" end) \(.url)"' "$t/result/pr.json"
+}
+
+# GitHub sign-in state, from gh itself: {"hosts": {"github.com": [{state,
+# active, login, ...}]}}. The token is never shown.
+cmd_github() {
+  [ "${1:-}" = status ] || die "usage: clankctl github status"
+  init_home
+  env_run --interactive=false --tty=false --volume /nix/store:/nix/store:ro -- \
+    "$CLANK_GH" auth status --hostname github.com --json hosts
 }
 
 cmd_shell() {
@@ -283,16 +336,54 @@ cmd_project() {
       printf 'url=%s\ntemplate=%s\n' "$url" "$template" >"$dir/project.env"
       echo "Added project $name ($(git -C "$dir/mirror.git" symbolic-ref --short HEAD), template $template)"
       ;;
+    set)
+      local name="${2:-}" key="${3:-}" value="${4:-}"
+      case "$key $value" in
+        "pull-requests on" | "pull-requests off") ;;
+        *) die "usage: clankctl project set <name> pull-requests on|off" ;;
+      esac
+      if ! valid_name "$name" || [ ! -f "$projects/$name/project.env" ]; then die "no such project: $name"; fi
+      local env="$projects/$name/project.env"
+      { grep -v '^pull_requests=' "$env" || true; echo "pull_requests=$value"; } >"$env.new"
+      mv "$env.new" "$env"
+      echo "$name: pull requests $value"
+      ;;
     list)
       local d
       for d in "$projects"/*/; do
         [ -f "$d/project.env" ] || continue
-        printf '%-20s %-14s %s\n' "$(basename "$d")" "$(kv "$d/project.env" template)" \
-          "$(kv "$d/project.env" url)"
+        printf '%-20s %-14s %-4s %s\n' "$(basename "$d")" "$(kv "$d/project.env" template)" \
+          "$(pull_requests_on "$(basename "$d")" && echo PRs || echo -)" "$(kv "$d/project.env" url)"
       done
       ;;
-    *) die "usage: clankctl project add [--template auto|linux-default] <name> <git-url> | clankctl project list" ;;
+    *) die "usage: clankctl project add [--template auto|linux-default] <name> <git-url> | clankctl project list | clankctl project set <name> pull-requests on|off" ;;
   esac
+}
+
+# Pull requests (design: 8.2) are on for a GitHub project unless turned off.
+pull_requests_on() {
+  local env="$projects/$1/project.env" url setting
+  url=$(kv "$env" url)
+  setting=$(kv "$env" pull_requests)
+  [ "$setting" != off ] || return 1
+  case "$url" in
+    https://github.com/* | git@github.com:* | ssh://git@github.com/*) return 0 ;;
+  esac
+  # Another remote only when turned on by hand (tests use a stand-in remote).
+  [ "$setting" = on ]
+}
+
+# A task's branch: words from its prompt and the end of its id, e.g.
+# clank/add-contact-form-a2be (design: 8.2).
+task_branch() {
+  local slug
+  slug=$(printf '%s\n' "$2" | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' ' ' |
+    awk '{ out = ""; for (i = 1; i <= NF && i <= 6; i++) { if (length(out) + length($i) > 40) break; out = out (out ? "-" : "") $i } print out }')
+  if [ -n "$slug" ]; then
+    printf 'clank/%s-%s' "$slug" "${1##*-}"
+  else
+    printf 'clank/%s' "$1"
+  fi
 }
 
 # ---- tasks -------------------------------------------------------------------
@@ -689,14 +780,22 @@ cmd_run() {
   printf '%s\n' "$base" >"$t/base"
   : >"$t/resume"
   log_turn "$id" run "$prompt"
-  printf 'project=%s\nbranch=%s\nbase=%s\ncreated=%s\nuser=%s\n' \
-    "$name" "$branch" "$base" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$CLANK_USER" >"$t/task.env"
+  local head
+  head=$(task_branch "$id" "$prompt")
+  printf 'project=%s\nbranch=%s\nbase=%s\ncreated=%s\nuser=%s\nhead=%s\n' \
+    "$name" "$branch" "$base" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$CLANK_USER" "$head" >"$t/task.env"
+  # Pull requests (design: 8.2): what the runner needs to open one.
+  if pull_requests_on "$name"; then
+    printf 'task=%s\nbase=%s\ntitle=%s\napp_url=%s\n' "$id" "$branch" \
+      "$(printf '%s\n' "$prompt" | head -n 1 | cut -c1-100)" "${CLANK_APP_URL:-}" >"$t/pr.env"
+    printf '%s\n' "$prompt" >"$t/pr-prompt.md"
+  fi
 
   # A local clone (hardlinked objects, so cheap) keeps the task's repo
   # self-contained; the agent can't damage the mirror.
   git clone --quiet --branch "$branch" "$mirror" "$t/worktree"
   git -C "$t/worktree" remote set-url origin "$(kv "$dir/project.env" url)"
-  git -C "$t/worktree" switch --quiet --create "clank/$id"
+  git -C "$t/worktree" switch --quiet --create "$head"
 
   local template config
   template=$(kv "$dir/project.env" template)
@@ -1287,6 +1386,8 @@ case "${1:-}" in
   logs) shift; cmd_logs "$@" ;;
   harness) shift; cmd_harness "$@" ;;
   login) shift; cmd_login "$@" ;;
+  github) shift; cmd_github "$@" ;;
+  pr) shift; cmd_pr "$@" ;;
   shell) shift; cmd_shell "$@" ;;
   project) shift; cmd_project "$@" ;;
   run) shift; cmd_run "$@" ;;

@@ -29,8 +29,10 @@ package main
 // Terminals and Claude (S3):
 //   GET /api/claude              Claude Code installed / signed in (claude.go)
 //   GET /api/terminals           open terminal sessions [{kind, task}]
-//   GET /api/terminal/{kind}     WebSocket; kind login or install
+//   GET /api/terminal/{kind}     WebSocket; kind login, install or github
 //                                (terminal.go has the protocol)
+//
+// GitHub (S10, github.go): GET /api/github, POST /api/projects/{name}/pull-requests
 
 import (
 	"context"
@@ -54,9 +56,31 @@ import (
 func newServer(s *Store, c *Clankctl, ui fs.FS) http.Handler {
 	mux := http.NewServeMux()
 	claude := &claudeCache{}
+	github := &githubCache{}
+	prs := &prRefresher{}
 	terms := NewTerminals(c, func(kind, task string) {
 		s.invalidate()
 		claude.invalidate()
+		github.invalidate()
+	})
+	mux.HandleFunc("GET /api/github", func(w http.ResponseWriter, r *http.Request) {
+		st, err := github.get(r.Context(), c)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, st)
+	})
+	mux.HandleFunc("POST /api/projects/{name}/pull-requests", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ On bool }
+		if !readJSON(w, r, &in) {
+			return
+		}
+		if err := c.SetPullRequests(r.Context(), r.PathValue("name"), in.On); err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, identityFrom(r.Context()))
@@ -238,6 +262,8 @@ func newServer(s *Store, c *Clankctl, ui fs.FS) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		// Merged or closed on GitHub since the last push? (in the background)
+		prs.maybe(c, s, d.ID, d.PR)
 		writeJSON(w, d)
 	})
 	mux.HandleFunc("GET /api/tasks/{id}/changes", func(w http.ResponseWriter, r *http.Request) {

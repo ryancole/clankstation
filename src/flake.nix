@@ -110,6 +110,7 @@
         s6-push = import ./tests/s6-push.nix { inherit self pkgs; };
         s7-box = import ./tests/s7-box.nix { inherit self pkgs; };
         s9-console = import ./tests/s9-console.nix { inherit self pkgs; };
+        s10-pull-requests = import ./tests/s10-pull-requests.nix { inherit self pkgs; };
       }
       // import ./tests/m1-storage.nix { inherit self pkgs disko; };
 

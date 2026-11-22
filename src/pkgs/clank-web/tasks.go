@@ -181,11 +181,14 @@ type TaskSummary struct {
 	// One line for the card: the current step while working, the question
 	// when it needs an answer, else the summary's first sentence.
 	Activity string `json:"activity,omitempty"`
+	// Its pull request on GitHub (S10), once the first push opened one.
+	PR *PullRequest `json:"pr,omitempty"`
 }
 
 type TaskDetail struct {
 	TaskSummary
 	Branch   string  `json:"branch"`
+	Head     string  `json:"head,omitempty"` // the task's own branch (S10)
 	Env      string  `json:"env"`
 	Summary  string  `json:"summary"`
 	Question string  `json:"question,omitempty"`
@@ -270,8 +273,10 @@ func (s *Store) summary(id, dir string, running bool) TaskDetail {
 			Archived: fileExists(filepath.Join(dir, "pruned")),
 			Created:  env["created"],
 			Turns:    len(turns),
+			PR:       readPullRequest(dir),
 		},
 		Branch:   env["branch"],
+		Head:     env["head"],
 		Env:      env["env"],
 		Summary:  summaryText,
 		Question: question,

@@ -1,5 +1,5 @@
 <script>
-  import { getClaude, getMe, getBox, checkForUpdates, updateBox } from '../lib/api.js';
+  import { getClaude, getMe, getBox, checkForUpdates, updateBox, getGitHub } from '../lib/api.js';
   import { ago } from '../lib/states.js';
   import { pushSupport, currentSubscription, turnOn, turnOff, sendTest } from '../lib/push.js';
 
@@ -14,7 +14,14 @@
     getMe()
       .then((m) => (me = m))
       .catch(() => {});
+    getGitHub()
+      .then((g) => (github = g))
+      .catch((e) => (githubErr = e.message));
   });
+
+  // GitHub (S10): signed in for pull requests?
+  let github = $state(null);
+  let githubErr = $state('');
 
   // Notifications on this device.
   const support = pushSupport();
@@ -182,6 +189,34 @@
   <p class="note muted small">
     Signing in opens Claude's own sign-in in a terminal. The box passes your typing along and never
     sees, keeps or reads your password or sign-in.
+  </p>
+
+  <h2 class="section-title">GitHub</h2>
+  <div class="card group">
+    {#if githubErr}
+      <p class="row error-box">{githubErr}</p>
+    {:else if !github}
+      <p class="row muted">Checking GitHub…</p>
+    {:else}
+      <div class="row">
+        <span class="text">
+          <span class="label">{github.signed_in ? `Signed in as ${github.login}` : 'Not signed in'}</span>
+          {#if github.signed_in}
+            <span class="small ok">Tasks on GitHub projects open a draft pull request</span>
+          {:else}
+            <span class="muted small">Sign in so tasks can open pull requests on your GitHub projects.</span>
+          {/if}
+        </span>
+        <a class={`btn small ${github.signed_in ? '' : 'primary'}`} href="#/terminal/github">
+          {github.signed_in ? 'Sign in again' : 'Sign in'}
+        </a>
+      </div>
+    {/if}
+  </div>
+  <p class="note muted small">
+    Signing in uses GitHub's own sign-in: you enter a code on github.com. The box never sees, keeps
+    or reads your password or sign-in. Pull requests are turned on or off per project in
+    <a class="link" href="#/projects">Projects</a>.
   </p>
 
   <h2 class="section-title">This device</h2>

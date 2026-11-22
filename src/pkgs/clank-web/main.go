@@ -85,7 +85,16 @@ func main() {
 		go NewNotifier(store, push).Run(context.Background(), 3*time.Second)
 	}
 
-	app := newServer(store, &Clankctl{Path: *clankctl, User: *user}, ui)
+	// Pull requests link back to the task in the app (S10).
+	appURL := func() string {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if st, err := ts.Status(ctx); err == nil && len(st.CertDomains) > 0 {
+			return "https://" + st.CertDomains[0]
+		}
+		return ""
+	}
+	app := newServer(store, &Clankctl{Path: *clankctl, User: *user, AppURL: appURL}, ui)
 
 	errs := make(chan error, 3)
 	serve := func(name string, srv *http.Server, tls bool) {

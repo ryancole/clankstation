@@ -65,6 +65,7 @@ broad permissions inside their environment.
 | Updates from the app (S7) | `clank-web` (unprivileged) asks by writing `check` or `update` to `settings/update-request`; a root `clankstation-update` service, started by a systemd path unit, runs `clankctl update [--check]` and writes the result to `update/` (root-owned). The update runs outside `clank-web`, which the rebuild may restart, and the rebuild doesn't restart it. "Check for updates" contacts GitHub only when tapped. No restart button: a new kernel shows a "restart the box" note | Settled (2026-11-22) |
 | HTTPS and remote access | Default: Tailscale (`services.tailscale` from nixpkgs, no new flake input). The app is served at the box's `*.ts.net` name with Tailscale's Let's Encrypt certificate, the same name at home and away (the PWA, service worker and push subscriptions are tied to one origin). The owner signs in to Tailscale through its own flow. Alternative, documented: the owner's own domain with an ACME DNS-01 certificate (`security.acme`), where the owner handles reachability (port forward, split DNS). LAN-only fallback: a box-local CA, name-constrained to the box, installed per device (also used on the dev VM). Not offered: tunnel services that terminate TLS (they would see the terminal during harness sign-in). Reachable from outside the home means the GUI always requires a household login | Settled (2026-11-21) |
 | The box's own screen (S9) | A read-only status page on tty1 in place of the login prompt, no graphics stack: `clank-web -console` (the same binary, as `clankstation`) draws it with ANSI text and a QR code from `qrencode` (nixpkgs). It shows how to reach the app, the tasks and problems; it changes nothing. The admin login stays on Alt+F2. Not a desktop environment or a kiosk browser (RAM, and the app's login is a Tailscale device) | Settled (2026-11-22) |
+| Pull requests on GitHub (S10) | One task = one branch (`clank/<words>-<id>`) = one draft pull request, kept up to date as the task works: Claude commits as it likes, the runner commits what's left and pushes after every turn. A per-project setting, on by default for GitHub projects; the owner's own GitHub account; the owner marks it ready on GitHub. All GitHub work (push, open the pull request, and fetching a private repo) runs inside a task container with GitHub's own CLI signed in to the user's home volume, so the host never reads the GitHub sign-in. Section 8.2 | Settled (2026-11-22) |
 | Desktop layout (S8) | The same Svelte app, responsive; no second client and no new API. Under 900px wide, the phone screens as they are. From 900px, two panes: the task list on the left, the open page on the right. From 1400px, a task page also shows its changes in a third pane. Routes stay the same hash URLs, so links and notifications open the same place on either | Settled (2026-11-22) |
 
 ## 4. Architecture
@@ -653,6 +654,96 @@ Each is verified on the dev VM (and a NixOS VM test where it fits).
 | S7 | Box settings: updates, storage | "Update now" works from the GUI. So far: `s7-box` VM test (version and free space, cross-site refusal, a check, an update through an app restart, a check that can't reach GitHub, an interrupted update) and Go tests. On the Hyper-V box (2026-11-22), after `clankctl update` over SSH: Settings on the phone showed the version and free space, and Check for updates said "Up to date". Done (2026-11-22): on the phone, Check for updates found the newer commit and Update now updated the Hyper-V box to it |
 | S8 | Desktop layout: two and three panes, a changes view for wide screens, a task list that stays live (`docs/gui.md` 3.8) | On a PC browser at 1280px and 1600px wide, a task can be started, watched live from the list and the task page, its changes read file by file, and replied to, without a reload; at phone width every screen is unchanged. Done: on the Hyper-V box (2026-11-22), after Update now from the phone, the desktop layout opened in a PC browser over Tailscale. Before that, on the dev VM: the new UI (Vite dev server against the dev VM's API) at 1280px and 1600px: two panes, then three; a real Claude Code task started from New task moved from Working to Needs you in the list while another task was open, was answered from its page, and the changes pane refreshed to the new turn's file; side by side remembered; at 375px no side list, the phone Changes page as before. The dev VM builds with it, and `s1-web` and `s2-actions` pass (`s1-web` failed once on a race: it reads the state right after `status.json` appears, while the container can still be shutting down). The dev VM, restarted with it, serves the new build on :8080: the side list, the task page and the changes pane at 1600px |
 | S9 | The box's own screen: a status page on tty1 (`docs/gui.md` 3.9) | With a monitor on the box, someone who just plugged it in can set it up from the screen alone, and later sees the app's address and what the tasks are doing. So far: Go tests (layout at 80x25 and narrow, the state from a fake tailscaled and task files) and the `s9-console` VM test (no login prompt on tty1; the set-up page with the QR code and the box's address; tasks that need you, wait and work, then none; a failed update and low disk space shown; typed keys go nowhere; Alt+F2 gives the admin login and Alt+F1 the page again; it comes back when stopped; screenshots in the test's output). On the dev VM (2026-11-22), rebuilt and restarted: tty1 showed the page at 160 columns (read over SSH from `/dev/vcs1`): the set-up steps with the QR code (its Tailscale node needs signing in again), its two real tasks that need an answer, low space on its 16 GB system disk, the version and free space. Done (2026-11-22): on the Hyper-V box after Update now, its screen in Hyper-V's VM window showed the ready page ("Open the app", its ts.net address and QR code, the version and free space), and the QR code scanned from a phone opened the app |
+| S10 | Pull requests on GitHub (section 8.2) | A task on a GitHub project opens a draft pull request after its first turn, and every later turn pushes to it; the app links to it and shows its state. So far: `s10-pull-requests` VM test (a stand-in git server and a stub `gh`: readable branch, Claude's uncommitted work committed as the user, the push, a draft pull request, updated by the next turn; not signed in; a merged pull request gets a new one; `clankctl pr refresh`; off per project) and Go tests; m4-task, s1-web, s2-actions, s3-terminal, s4-queue, m5-takeover, m6-devcontainer and s9-console still pass. On the WSL VM (2026-11-22): Settings shows GitHub as not signed in, the sign-in terminal shows GitHub's code and link and asks nothing else, and the Projects checkbox turns a project's pull requests off and on. Still to check: a real pull request on GitHub |
+
+### 8.2 Pull requests on GitHub (S10)
+
+Today a task's work stays on the box: its branch `clank/<task-id>` lives in
+the task's own clone (`tasks/<id>/worktree`), and the app shows the diff.
+Nothing reaches the project's GitHub repository unless someone pushes the
+branch by hand over SSH. S10 makes the pull request the way work leaves the
+box, and keeps it current while the task works, as people already do with
+coding agents.
+
+**One task = one branch = one pull request.**
+
+1. **Start.** The task starts as today from the default branch, on its
+   branch `clank/<words>-<id>` (decided below).
+2. **After each turn** (headless run, reply, or a lost task continued), the
+   runner commits whatever Claude left uncommitted ("Claude: <first line of
+   the turn's prompt>"), then pushes the branch. Claude's own commits are
+   kept as they are; the box only adds a commit when the working tree isn't
+   clean.
+3. **The first push opens a draft pull request**: title from the task's
+   prompt, body with the prompt, the turn's summary and a link back to the
+   task in the app. GitHub can't open a pull request with no changes, so a
+   task that changed nothing has no pull request yet. Later pushes update the
+   same pull request; the body's summary is replaced with the latest turn's.
+4. **In the app**, the task page links to its pull request (number and
+   state: draft, open, merged, closed). Replies stay in the app. Marking it
+   ready, reviewing and merging happen on GitHub.
+5. **Merged or closed** on GitHub: the app shows it (checked when the task
+   page is open, and on the cleanup timer). A merged task's branch is left
+   for GitHub's own "delete branch" setting.
+
+**Where GitHub access lives.** Clankstation never collects, stores or reads
+sign-ins (5.7). The GitHub sign-in works like Claude's: Settings runs GitHub's
+own CLI (`gh auth login`, the device-code flow) in a container, and the token
+stays in the user's home volume (`~/.config/gh`), which the host mounts and
+never reads. So every step that needs it runs **inside a container** on the
+task's worktree, not on the host: `gh auth setup-git` makes git use it for
+`git push`, and `gh pr create` / `gh pr edit` / `gh pr view --json` do the
+rest. `gh` comes from the host's `/nix/store`, mounted read-only like the
+runner's other tools, so it works in any task image without installing
+anything in it.
+
+The same applies to **private repositories**, which can't be added today
+(`clankctl project add` runs `git clone --mirror` on the host with no
+credentials): with GitHub signed in, the mirror clone and its fetch before
+each task would also run in a container with the home volume.
+
+**Built:** `clankctl login github` and `clankctl github status` (gh from the
+host's `/nix/store`, in the default image with the home volume);
+`clankctl project set <name> pull-requests on|off` (`pull_requests=` in
+`project.env`); `clankctl pr refresh <task>` (`gh pr view --repo <url>` in a
+container, into `result/pr.json`). At task creation clankctl names the
+branch and, with pull requests on, writes `pr.env` (task, base branch,
+title, the app's address from `CLANK_APP_URL`) and `pr-prompt.md`. The
+runner (`publish` in `task-run.sh`) uses a `gh` installed in the user's
+environment first, then the host's; it pushes with gh as git's credential
+helper for that one command only (nothing is written to `~/.gitconfig`).
+`clank-web`: `GET /api/github`, `POST /api/projects/{name}/pull-requests`,
+`pr` on each task, and a background `clankctl pr refresh` at most once a
+minute when an open pull request's task page is looked at.
+Private repositories are not done yet.
+
+**Planned changes (as proposed):** `task-run.sh` (commit and push at the end of a turn, open or
+update the pull request, write `result/pr.json` with number, URL and state);
+`clankctl` (a `github` harness-like sign-in: `clankctl login github`,
+`clankctl github status`; mirror clone and fetch in a container when the URL
+is on GitHub); `clank-web` (Settings: GitHub sign-in through the browser
+terminal, like Claude's; the task page and list: the pull request link and
+state); `docs/gui.md` (the screens). A VM test can't reach GitHub: it would
+use a stand-in remote and a stub `gh`, as the existing tests stub `claude`,
+and the real flow is checked on the HyperV VM.
+
+**Decided (2026-11-22):**
+
+- **A project setting.** Each project has "Open pull requests on GitHub",
+  on by default for GitHub projects once GitHub is signed in; off for other
+  remotes. A task (one AI session: the prompt and every reply, one Claude
+  conversation) on such a project gets one branch and one pull request.
+- **Claude commits, the box tidies up.** Claude commits as it likes; after
+  each turn the runner commits what's left, then pushes.
+- **Always a draft.** The owner marks it ready for review on GitHub.
+- **The owner's own GitHub account**, signed in from Settings, so pushes and
+  pull requests show as them. One household user for now (section 7 of
+  `docs/gui.md`).
+- **Branch name: readable plus the id**, `clank/<words-from-the-prompt>-<4
+  hex of the task id>`, e.g. `clank/add-contact-form-a2be`. The same name is
+  the task's local branch.
+- **No replies from GitHub in S10.** Replies happen in the app; a comment on
+  the pull request doesn't start a turn. Maybe later.
 
 ## 9. Open questions
 

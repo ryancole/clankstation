@@ -8,6 +8,8 @@
   devcontainer,
   docker,
   findutils,
+  gawk,
+  gh,
   git,
   gnugrep,
   gnused,
@@ -32,6 +34,7 @@ let
       bashInteractive
       coreutils
       findutils
+      gh
       git
       gnugrep
       gnused
@@ -62,6 +65,7 @@ writeShellApplication {
     devcontainer
     docker
     findutils
+    gawk
     git
     gnugrep
     gnused
@@ -79,6 +83,7 @@ writeShellApplication {
     CLANK_IMAGE=${lib.escapeShellArg image}
     CLANK_TASK_RUN=${taskRun}
     CLANK_BASH=${bashInteractive}/bin/bash
+    CLANK_GH=${gh}/bin/gh
     CLANK_AGENT_LAYER=${agentLayer}
     CLANK_WINDOWS_TEMPLATES=${windowsTemplates}
     CLANK_VIRTIO_WIN=${virtio-win}

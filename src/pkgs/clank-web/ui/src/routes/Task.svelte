@@ -155,6 +155,9 @@
   function bar(n) {
     return n ? Math.max(4, Math.round((n / maxLines) * 48)) : 0;
   }
+  // A task's pull request on GitHub (S10).
+  const PR_STATES = { draft: 'Draft', open: 'Open', merged: 'Merged', closed: 'Closed' };
+
   function time(iso) {
     const t = Date.parse(iso);
     return Number.isNaN(t) ? '' : new Date(t).toLocaleString(undefined, { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
@@ -184,6 +187,15 @@
       </div>
       <h1>{task.title || 'Untitled task'}</h1>
       {#if info.sentence && cur !== 'needs_input'}<p class="sentence">{info.sentence}</p>{/if}
+      {#if task.pr?.url}
+        <a class="pr" href={task.pr.url} target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"></circle><circle cx="6" cy="18" r="2.5"></circle><circle cx="18" cy="18" r="2.5"></circle><path d="M6 8.5v7M18 15.5V10a3 3 0 0 0-3-3h-4"></path><path d="M13 4.5 10.5 7 13 9.5"></path></svg>
+          <span>Pull request #{task.pr.number}</span>
+          <span class={`pr-state ${task.pr.state}`}>{PR_STATES[task.pr.state] ?? task.pr.state}</span>
+          <span class="muted small">on GitHub</span>
+        </a>
+      {/if}
+      {#if task.pr?.error}<p class="pr-error small">{task.pr.error}</p>{/if}
     </header>
 
     {#if active}
@@ -371,6 +383,13 @@
   .head { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
   .head h1 { margin: 0; font-size: 22px; line-height: 1.25; overflow-wrap: anywhere; }
   .meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .pr { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); text-decoration: none; font-size: 14px; font-weight: 600; }
+  .pr:hover { border-color: var(--border-strong); }
+  .pr-state { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--idle-bg); color: var(--idle-fg); }
+  .pr-state.open { background: var(--done-bg); color: var(--done-fg); }
+  .pr-state.merged { background: var(--working-bg); color: var(--working-fg); }
+  .pr-state.closed { background: var(--bad-bg); color: var(--bad-fg); }
+  .pr-error { margin: 0; color: var(--needs-fg); }
   .small { font-size: 13px; }
   .sentence { margin: 0; color: var(--text-2); font-size: 15px; }
   section { margin: 22px 0; }

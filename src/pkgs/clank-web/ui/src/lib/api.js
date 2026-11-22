@@ -117,6 +117,11 @@ export async function getClaude() {
 
 export const getMe = () => getJSON('/api/me');
 
+// GitHub (S10): sign-in state, and a project's pull requests on or off.
+export const getGitHub = () => getJSON('/api/github');
+export const setPullRequests = (project, on) =>
+  postJSON(`/api/projects/${encodeURIComponent(project)}/pull-requests`, { on });
+
 // Notifications (S6).
 export const getPushKey = () => getJSON('/api/push/key');
 export const pushSubscribe = (sub) => postJSON('/api/push/subscribe', sub);

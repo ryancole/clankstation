@@ -19,6 +19,9 @@ import (
 type Clankctl struct {
 	Path string // the clankctl executable
 	User string // household user (CLANK_USER) for new tasks
+	// AppURL is the app's address (https://<name>.ts.net), linked from pull
+	// requests (S10). Optional.
+	AppURL func() string
 }
 
 // ActionError is a failed clankctl command, with its message for the user.
@@ -35,6 +38,9 @@ func (c *Clankctl) run(ctx context.Context, timeout time.Duration, stdin string,
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.Path, args...)
 	cmd.Env = append(os.Environ(), "CLANK_USER="+c.User)
+	if c.AppURL != nil {
+		cmd.Env = append(cmd.Env, "CLANK_APP_URL="+c.AppURL())
+	}
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
@@ -124,6 +130,9 @@ type Project struct {
 	URL      string `json:"url"`
 	Template string `json:"template"`
 	LastUsed string `json:"last_used,omitempty"` // newest task's creation time
+	// Pull requests on GitHub (S10): on by default for GitHub projects.
+	GitHub       bool `json:"github"`
+	PullRequests bool `json:"pull_requests"`
 }
 
 // Projects lists projects/*/project.env, the most recently used first.
@@ -147,7 +156,10 @@ func (s *Store) Projects() []Project {
 			continue
 		}
 		kv := readKV(env)
-		out = append(out, Project{Name: e.Name(), URL: kv["url"], Template: kv["template"], LastUsed: last[e.Name()]})
+		gh := githubURL(kv["url"])
+		prs := kv["pull_requests"] == "on" || (gh && kv["pull_requests"] != "off")
+		out = append(out, Project{Name: e.Name(), URL: kv["url"], Template: kv["template"], LastUsed: last[e.Name()],
+			GitHub: gh, PullRequests: prs})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].LastUsed != out[j].LastUsed {

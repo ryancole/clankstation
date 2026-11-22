@@ -117,7 +117,10 @@ pkgs.testers.runNixOSTest {
     # The task works on its own clone and branch; the mirror is untouched.
     # (git as the owning user: git refuses repos owned by someone else.)
     git = "sudo -u clankstation git"
-    clankstation.succeed(f"test \"$({git} -C {tasks}/{t1}/worktree branch --show-current)\" = clank/{t1}")
+    # Its branch: words from the prompt and the end of the id (S10).
+    head = clankstation.succeed(f"sed -n 's/^head=//p' {tasks}/{t1}/task.env").strip()
+    assert re.fullmatch(rf"clank/[a-z0-9-]+-{t1[-4:]}", head), head
+    clankstation.succeed(f"test \"$({git} -C {tasks}/{t1}/worktree branch --show-current)\" = {head}")
     clankstation.succeed(f"test -z \"$({git} -C /var/lib/clankstation/projects/demo/mirror.git branch --list 'clank/*')\"")
     clankstation.succeed(f"test \"$(stat -c %U {tasks}/{t1}/worktree/added.txt)\" = clankstation")
 

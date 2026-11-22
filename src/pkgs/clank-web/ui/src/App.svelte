@@ -12,14 +12,14 @@
   const loadTerminal = () => import('./routes/Terminal.svelte');
 
   // Hash routes: #/  #/new  #/projects  #/settings  #/task/<id>
-  // #/task/<id>/changes  #/terminal/login|install
+  // #/task/<id>/changes  #/terminal/login|install|github
   function parse(hash) {
     const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
     if (parts[0] === 'task' && parts[1]) {
       return { page: parts[2] === 'changes' ? 'changes' : 'task', id: parts[1] };
     }
     if (parts[0] === 'new' || parts[0] === 'projects' || parts[0] === 'settings') return { page: parts[0] };
-    if (parts[0] === 'terminal' && ['login', 'install'].includes(parts[1])) {
+    if (parts[0] === 'terminal' && ['login', 'install', 'github'].includes(parts[1])) {
       return { page: 'terminal', kind: parts[1], id: '' };
     }
     return { page: 'home' };

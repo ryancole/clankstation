@@ -3,12 +3,13 @@
   import { FitAddon } from '@xterm/addon-fit';
   import '@xterm/xterm/css/xterm.css';
 
-  // kind: login or install (taking over a task is out of the app for now)
+  // kind: login, install or github (taking over a task is out of the app for now)
   let { kind, task = '' } = $props();
 
   const TITLES = {
     login: 'Sign in to Claude',
     install: 'Set up Claude',
+    github: 'Sign in to GitHub',
   };
   const backHref = '#/settings';
 
@@ -181,6 +182,7 @@
         {:else if status === 'ending'}Closing…
         {:else if status === 'exited'}{closedByYou ? 'Closed.' : exitCode === 0 ? 'Finished.' : 'Ended with a problem. See the messages above.'}
         {:else if kind === 'login'}Follow Claude's own steps. The box never sees your sign-in.
+        {:else if kind === 'github'}Enter the code below at github.com/login/device.
         {:else}Running Claude's official installer.{/if}
       </span>
     </div>

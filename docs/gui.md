@@ -88,7 +88,10 @@ and links to Settings instead of letting a task fail.
 One page per task that changes with its state. From the top:
 
 - **Header:** title, project, state label and sentence (section 2), elapsed or
-  finished time.
+  finished time. With a pull request (S10): a "Pull request #12" button that
+  opens it on GitHub, with its state (Draft, Open, Merged, Closed). If the
+  last turn couldn't be pushed, why, in one line ("Sign in to GitHub in
+  Settings to open pull requests.").
 - **While working:**
   - **Now:** one plain-language line for the latest step, such as "Editing
     `contact.py`" or "Running the tests" (section 4).
@@ -105,7 +108,6 @@ One page per task that changes with its state. From the top:
   - **Reply box:** "Tell Claude what to do next" with a **Send** button
     (inside the question box when Claude asked one).
     Sending starts a new turn in the same task (`clankctl resume`).
-  - Later: **Send to GitHub** (open a PR).
 - **History** (below, collapsed after the latest turn): each earlier turn as
   "You asked" (from `prompts.log`) and "Claude did" (that turn's final
   message from `events.jsonl`). A take-over turn shows as "You worked with
@@ -130,7 +132,9 @@ it and reply. Over SSH, `clankctl attach` still works.
 
 ### 3.6 Projects
 
-A list of projects with the last task's date. **Add a project:** a name and
+A list of projects with the last task's date. A GitHub project has a
+checkbox, "Open a pull request on GitHub for each task" (S10), ticked by
+default. **Add a project:** a name and
 the git URL ("the address you'd use to clone it"). It runs `clankctl project
 add`; a failed clone shows git's message under "Details".
 
@@ -147,6 +151,11 @@ add`; a failed clone shows git's message under "Details".
   (Paste, Esc, Tab, Ctrl, arrows, Enter) with **Paste** (iPhones offer no paste menu inside a terminal): it reads the
   clipboard, or opens a box to paste the sign-in code into.
   (Built in S3. Settings also links to Projects.)
+- **GitHub (S10):** "Signed in as <login>" or "Not signed in", and **Sign
+  in**, which opens a browser terminal running GitHub's own device sign-in
+  (`gh auth login`): enter the code it shows at github.com/login/device.
+  It asks nothing else. As with Claude, the box never sees the sign-in.
+  A note that pull requests are turned on or off per project.
 - **Notifications (S6, under "This device"):** Turn on / Turn off for this
   device, and **Test** once on. On iPhone in Safari (not installed), a note
   to add Clankstation to the home screen first, since iPhones only offer
