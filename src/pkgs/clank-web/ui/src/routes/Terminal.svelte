@@ -13,8 +13,16 @@
   const backHref = '#/settings';
 
   let el;
+  let screenEl;
+  let term = null;
   let status = $state('connecting'); // connecting, open, reconnecting, ending, exited
+  // iPhones give no paste menu inside the terminal: Paste reads the
+  // clipboard, and if the browser won't allow that, a box to paste into.
+  let pasteBox = $state(false);
+  let pasteText = $state('');
+  let pasteInput = $state();
   let exitCode = $state(0);
+  let closedByYou = $state(false); // Close sends Ctrl-C: not a problem
   let ctrl = $state(false);
   let ws = null;
 
@@ -35,13 +43,37 @@
     else send(keys[k]);
   }
 
+  async function paste() {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        term?.paste(text);
+        term?.focus();
+        return;
+      }
+    } catch {
+      /* not allowed: fall back to the box */
+    }
+    pasteBox = true;
+    queueMicrotask(() => pasteInput?.focus());
+  }
+
+  function sendPasted(e) {
+    e.preventDefault();
+    if (pasteText) term?.paste(pasteText);
+    pasteText = '';
+    pasteBox = false;
+    term?.focus();
+  }
+
   function end() {
+    closedByYou = true;
     status = 'ending';
     control({ type: 'end' });
   }
 
   $effect(() => {
-    const term = new Terminal({
+    term = new Terminal({
       cursorBlink: true,
       fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
       fontSize: touch ? 13 : 14,
@@ -67,6 +99,18 @@
       sendSize();
     });
     ro.observe(el);
+
+    // Keep the screen (and the key row) above the on-screen keyboard: iOS
+    // doesn't shrink a fixed element when the keyboard opens.
+    const vv = window.visualViewport;
+    const fitViewport = () => {
+      if (!vv || !screenEl) return;
+      screenEl.style.height = `${vv.height}px`;
+      screenEl.style.top = `${vv.offsetTop}px`;
+    };
+    vv?.addEventListener('resize', fitViewport);
+    vv?.addEventListener('scroll', fitViewport);
+    fitViewport();
 
     let stopped = false;
     let retry = null;
@@ -94,7 +138,7 @@
             exitCode = c.code ?? 0;
             status = 'exited';
             stopped = true;
-            if (exitCode === 0) {
+            if (exitCode === 0 || closedByYou) {
               leaveTimer = setTimeout(() => (location.hash = backHref), 1500);
             }
           }
@@ -115,13 +159,16 @@
       clearTimeout(retry);
       clearTimeout(leaveTimer);
       ro.disconnect();
+      vv?.removeEventListener('resize', fitViewport);
+      vv?.removeEventListener('scroll', fitViewport);
       ws?.close();
       term.dispose();
+      term = null;
     };
   });
 </script>
 
-<div class="screen">
+<div class="screen" bind:this={screenEl}>
   <header>
     <a class="back" href={backHref} aria-label="Back (the session stays open)">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
@@ -132,7 +179,7 @@
         {#if status === 'connecting'}Connecting…
         {:else if status === 'reconnecting'}Connection lost. Reconnecting…
         {:else if status === 'ending'}Closing…
-        {:else if status === 'exited'}{exitCode === 0 ? 'Finished.' : 'Ended with a problem. See the messages above.'}
+        {:else if status === 'exited'}{closedByYou ? 'Closed.' : exitCode === 0 ? 'Finished.' : 'Ended with a problem. See the messages above.'}
         {:else if kind === 'login'}Follow Claude's own steps. The box never sees your sign-in.
         {:else}Running Claude's official installer.{/if}
       </span>
@@ -148,8 +195,21 @@
 
   <div class="term" bind:this={el}></div>
 
+  {#if pasteBox}
+    <form class="paste-box" onsubmit={sendPasted}>
+      <label for="paste-in">Paste here, then Send</label>
+      <div class="paste-row">
+        <input id="paste-in" bind:this={pasteInput} bind:value={pasteText}
+          autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+        <button type="submit">Send</button>
+        <button type="button" class="cancel" onclick={() => { pasteBox = false; pasteText = ''; }}>Cancel</button>
+      </div>
+    </form>
+  {/if}
+
   {#if touch}
     <div class="keys" role="toolbar" aria-label="Extra keys">
+      <button class="wide" onmousedown={(e) => e.preventDefault()} onclick={paste}>Paste</button>
       {#each ['Esc', 'Tab', 'Ctrl', 'Left', 'Up', 'Down', 'Right'] as k}
         <button class:on={k === 'Ctrl' && ctrl} aria-pressed={k === 'Ctrl' ? ctrl : undefined}
           aria-label={k.length > 4 || ['Left', 'Up', 'Down'].includes(k) ? `${k} arrow` : k}
@@ -163,7 +223,7 @@
 
 <style>
   .screen {
-    position: fixed; inset: 0; display: flex; flex-direction: column;
+    position: fixed; top: 0; left: 0; right: 0; height: 100%; display: flex; flex-direction: column;
     background: #0f1115; color: #e6e8ec;
     padding-bottom: env(safe-area-inset-bottom);
   }
@@ -183,7 +243,7 @@
   .end:disabled { opacity: 0.6; cursor: default; }
   .term { flex-grow: 1; min-height: 0; padding: 6px 4px 0 8px; }
   .keys {
-    display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px;
+    display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 5px;
     padding: 8px; background: #1a1d23; border-top: 1px solid #262a31;
   }
   .keys button {
@@ -191,4 +251,20 @@
     font: inherit; font-size: 14px; font-weight: 600;
   }
   .keys button.on { background: #6b93f0; color: #0d1426; }
+  .keys button.wide { grid-column: span 2; background: #6b93f0; color: #0d1426; }
+  .paste-box {
+    display: flex; flex-direction: column; gap: 6px; padding: 8px 10px;
+    background: #1a1d23; border-top: 1px solid #262a31;
+  }
+  .paste-box label { font-size: 13px; color: #a9b0bb; }
+  .paste-row { display: flex; gap: 6px; }
+  .paste-row input {
+    flex-grow: 1; min-width: 0; height: 44px; border-radius: 8px; border: 1px solid #3a3f49;
+    background: #0f1115; color: #e6e8ec; padding: 0 10px; font-size: 16px;
+  }
+  .paste-row button {
+    height: 44px; padding: 0 14px; border: 0; border-radius: 8px; font: inherit; font-size: 15px;
+    font-weight: 600; background: #6b93f0; color: #0d1426;
+  }
+  .paste-row button.cancel { background: #2b3038; color: #e6e8ec; }
 </style>

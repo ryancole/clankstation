@@ -143,6 +143,9 @@ add`; a failed clone shows git's message under "Details".
   and **Sign in**, which opens a browser terminal running Claude's own sign-in
   (`claude auth login`). The app only carries keystrokes to and from that
   terminal. It never reads, logs or stores what passes through it.
+  On a phone the terminal stays above the keyboard and has a key row with
+  **Paste** (iPhones offer no paste menu inside a terminal): it reads the
+  clipboard, or opens a box to paste the sign-in code into.
   (Built in S3. Settings also links to Projects.)
 - **Notifications (S6):** on/off for this device, with a test button. On iPhone,
   a note that notifications need the app installed to the home screen first.
