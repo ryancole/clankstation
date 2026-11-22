@@ -14,7 +14,7 @@ Service layer milestones S1–S8 are done (section 8.1): the web app with tasks,
 queue, Tailscale login over HTTPS, push notifications, box settings and a
 desktop layout. The screens are in `docs/gui.md`. What comes next isn't
 decided yet: ask.
-Develop and test on the WSL dev VM; the Hyper-V box is the real install.
+Develop and test on the WSL VM; the HyperV VM is the real install.
 
 ## Repo layout
 
@@ -67,10 +67,10 @@ export NIX_CONFIG="experimental-features = nix-command flakes"
 nix shell nixpkgs/nixos-26.05#git -c nix flake check ./src      # eval + VM tests
 nix shell nixpkgs/nixos-26.05#git -c nix build ./src#nixosConfigurations.dev-vm.config.system.build.devVm
 ./result/bin/clank-dev-vm                                         # --reset wipes the persistent data disk
-ssh -p 2222 admin@localhost                                       # dev VM only: password admin
+ssh -p 2222 admin@localhost                                       # WSL VM only: password admin
 ```
 
-- The dev VM boots from disko-formatted disks, not plain `build-vm`. The disko
+- The WSL VM boots from disko-formatted disks, not plain `build-vm`. The disko
   layout mounts the data disk by partition label, and plain `build-vm` has no
   such disk, so boot would hang waiting for it. Its data disk
   (`~/.local/share/clankstation-dev/data.qcow2` in WSL) persists across runs:
@@ -85,6 +85,15 @@ ssh -p 2222 admin@localhost                                       # dev VM only:
 - Windows VM work needs real hardware or libvirt directly in WSL, not build-vm.
 
 ## Working with the user
+
+- Name the two machines only these ways when talking to the user:
+  - **WSL VM**: QEMU inside the WSL distro, built from the local repo
+    (`clank-dev-vm`, `ssh -p 2222 admin@localhost`, `http://localhost:8080`).
+  - **HyperV VM**: the real install in Hyper-V, updated from GitHub `master`
+    (`https://clankstation.tailb9d90.ts.net`).
+  Never say "dev VM", "the box" or "the VM" alone; both machines are called
+  `clankstation`. Label every command or connection with the machine it is
+  for. (Older docs say "dev VM" and "Hyper-V box" for the same two.)
 
 - Work in small increments, one milestone at a time.
 - Ask before choosing anything hard to reverse: web stack, event protocol,
