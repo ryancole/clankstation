@@ -9,10 +9,11 @@ architecture, the decisions table and the milestones.
 OS milestones M0–M8 and M10 are done (see the milestones table in `docs/design.md`).
 Windows tasks (M9) are **shelved** by the user until the box gets more RAM and
 storage; don't work on Windows unless asked. The box updates
-itself with `clankctl update` (from GitHub `master`). Next is the service layer (web GUI, API, task queue, worker event
-protocol). Its stack, API/event protocol and HTTPS/remote access are decided
-(decisions table, 2026-11-21); the screens are in `docs/gui.md`.
-Develop and test it on the WSL dev VM.
+itself with `clankctl update` (from GitHub `master`) or Settings' **Update now**.
+Service layer milestones S1–S7 are done (section 8.1): the web app with tasks,
+queue, Tailscale login over HTTPS, push notifications and box settings. The
+screens are in `docs/gui.md`. What comes next isn't decided yet: ask.
+Develop and test on the WSL dev VM; the Hyper-V box is the real install.
 
 ## Repo layout
 
@@ -58,7 +59,7 @@ credential brokers. Agents get broad permissions inside their environment.
 Development is on Windows 11. Nix runs in the WSL distro `NixOS`, which has KVM.
 That distro has no `git` on its PATH, and Nix needs it for a flake inside a git
 repo, so wrap commands in `nix shell ...#git`. From the repo root in WSL
-(`/mnt/c/Users/Ryan/Documents/code/clankstation`):
+(`/mnt/d/code/clankstation`):
 
 ```
 export NIX_CONFIG="experimental-features = nix-command flakes"
