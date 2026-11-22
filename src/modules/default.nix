@@ -7,5 +7,7 @@
     ./docker.nix
     ./libvirt.nix
     ./clankctl.nix
+    ./cleanup.nix
+    ./update.nix
   ];
 }

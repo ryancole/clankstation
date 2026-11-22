@@ -19,11 +19,18 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
 
+      # `update` is the host's name in nixosConfigurations, which
+      # `clankctl update` rebuilds from GitHub (null: updates off).
       mkHost =
-        modules:
+        update: modules:
         nixpkgs.lib.nixosSystem {
           modules = [
-            { nixpkgs.hostPlatform = system; }
+            {
+              nixpkgs.hostPlatform = system;
+              clankstation.update.configuration = update;
+              # Shown by `nixos-version --configuration-revision`.
+              system.configurationRevision = self.rev or self.dirtyRev or null;
+            }
             self.nixosModules.default
           ]
           ++ modules;
@@ -52,16 +59,17 @@
 
       nixosConfigurations = {
         # The appliance itself (real hardware): OS disk + separate data disk.
-        clankstation = mkHost [ ./hosts/clankstation ];
+        clankstation = mkHost "clankstation" [ ./hosts/clankstation ];
 
         # The same, with data on the OS disk.
-        clankstation-one-disk = mkHost [
+        clankstation-one-disk = mkHost "clankstation-one-disk" [
           ./hosts/clankstation
           { clankstation.storage.dataDisk = null; }
         ];
 
-        # Same system, plus VM settings for local testing.
-        dev-vm = mkHost [
+        # Same system, plus VM settings for local testing. Rebuilt from WSL,
+        # not updated from GitHub.
+        dev-vm = mkHost null [
           ./hosts/clankstation
           ./hosts/dev-vm
         ];
@@ -91,6 +99,7 @@
         m6-devcontainer = import ./tests/m6-devcontainer.nix { inherit self pkgs; };
         m7-installer = import ./tests/m7-installer.nix { inherit self pkgs; };
         m8-windows-plumbing = import ./tests/m8-windows-plumbing.nix { inherit self pkgs; };
+        m10-cleanup-update = import ./tests/m10-cleanup-update.nix { inherit self pkgs; };
       }
       // import ./tests/m1-storage.nix { inherit self pkgs disko; };
 

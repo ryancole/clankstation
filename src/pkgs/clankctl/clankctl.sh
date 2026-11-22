@@ -37,6 +37,12 @@ Tasks:
   attach [--yes] <task-id>       Take over in an interactive Claude Code terminal
                                  (a running task's headless run is stopped first)
   stop <task-id>                 Stop a running task (keeps its results so far)
+  clean [--older-than 7d] [--dry-run]
+                                 Remove the worktrees of tasks that finished longer
+                                 ago than that (a daily timer does this with 7d),
+                                 and devcontainer images no remaining task uses.
+                                 Summaries, diffs and logs are kept
+  delete <task-id>               Remove a finished task entirely, results included
 
 Harness (per-user, opt-in):
   harness enable claude          Install Claude Code into your home volume (official installer)
@@ -62,6 +68,10 @@ Windows base images (QEMU/KVM):
   windows cancel <name>          Stop a build
   windows remove <name>          Delete a base image (or a failed build)
 
+System:
+  update [--check]               Update the box from its flake on GitHub (--check:
+                                 only show the installed and latest revisions)
+
 Environment variables:
   CLANK_USER                     Household user whose home volume to use (default: default)
 EOF
@@ -71,6 +81,45 @@ die() {
   echo "clankctl: $*" >&2
   exit 1
 }
+
+# Update the system from the flake this box was installed from (design: 5.2).
+# Runs as the calling admin (sudo for the rebuild), not the service user.
+cmd_update() {
+  local check=false
+  case "${1:-}" in
+    --check) check=true ;;
+    "") ;;
+    *) die "usage: clankctl update [--check]" ;;
+  esac
+  local env=/etc/clankstation/update.env flake config current latest
+  flake=$(sed -n 's/^flake=//p' "$env" 2>/dev/null || true)
+  config=$(sed -n 's/^configuration=//p' "$env" 2>/dev/null || true)
+  [ -n "$flake" ] && [ -n "$config" ] ||
+    die "updates are off on this system (the dev VM is rebuilt from the repo in WSL instead)"
+  current=$(nixos-version --configuration-revision 2>/dev/null || true)
+  latest=$(nix flake metadata --refresh --json "$flake" | jq -r '.revision // empty') ||
+    die "could not reach $flake"
+  echo "Installed: ${current:-unknown} ($config)"
+  echo "Latest:    ${latest:-unknown} ($flake)"
+  if [ -n "$latest" ] && [ "$current" = "$latest" ]; then
+    echo "Up to date."
+    return 0
+  fi
+  [ "$check" = false ] || return 0
+  local sudo=(sudo)
+  if [ "$(id -u)" = 0 ]; then sudo=(); fi
+  "${sudo[@]}" nixos-rebuild switch --refresh --flake "$flake#$config"
+  echo "Now at: $(nixos-version --configuration-revision 2>/dev/null || echo unknown)"
+  if [ "$(readlink -f /run/booted-system/kernel)" != "$(readlink -f /run/current-system/kernel)" ]; then
+    echo "The kernel changed: reboot to use it (sudo reboot)."
+  fi
+}
+
+if [ "${1:-}" = update ]; then
+  shift
+  cmd_update "$@"
+  exit
+fi
 
 # Run as the clankstation service user, so files get the right owner.
 if [ "$(id -u)" != "$CLANK_UID" ]; then
@@ -529,6 +578,9 @@ cmd_show() {
   if [ -f "$t/status.json" ]; then
     echo "Session: $(jq -r .session_id "$t/status.json")"
   fi
+  if [ -f "$t/pruned" ]; then
+    echo "Cleaned: $(cat "$t/pruned") (worktree removed; results kept)"
+  fi
   echo
   echo "Prompt:"
   sed 's/^/  /' "$t/prompt.txt"
@@ -554,11 +606,18 @@ cmd_diff() {
   fi
 }
 
+# A cleaned-up task keeps its results but has no worktree to continue in.
+require_worktree() {
+  [ -d "$tasks/$1/worktree" ] ||
+    die "task $1 was cleaned up ($(cat "$tasks/$1/pruned" 2>/dev/null || echo "date unknown")); its worktree is gone, so it can't continue. Its results remain: clankctl show $1, clankctl diff $1"
+}
+
 cmd_resume() {
   local id="${1:-}" prompt="${2:-}" t sid
   [ -n "$id" ] && [ -n "$prompt" ] || die "usage: clankctl resume <task-id> <prompt>"
   t=$(task_dir "$id")
   require_not_running "$id"
+  require_worktree "$id"
   sid=$(session_of "$id")
   if [ "$prompt" = - ]; then prompt=$(cat); fi
   require_image "$(task_image "$id")"
@@ -593,6 +652,7 @@ cmd_attach() {
   [ -n "$id" ] || die "usage: clankctl attach [--yes] <task-id>"
   t=$(task_dir "$id")
   [ "$(task_state "$id")" != preparing ] || die "task $id is still preparing its environment"
+  require_worktree "$id"
   if [ "$(task_state "$id")" = running ]; then
     if [ "$yes" != true ]; then
       [ -t 0 ] || die "task $id is running; pass --yes to stop its headless run and take over"
@@ -659,6 +719,7 @@ task_shell() {
   if [ "$(task_state "$id")" = running ]; then
     docker exec "${tty[@]}" --user "$CLANK_UID:$CLANK_GID" --workdir /workspace "clank-$id" "$@"
   else
+    require_worktree "$id"
     local image
     image=$(task_image "$id")
     require_image "$image"
@@ -668,6 +729,113 @@ task_shell() {
     mapfile -t opts < <(task_container_opts "$id" "clank-$id-shell")
     docker run --rm "${tty[@]}" "${opts[@]}" "$image" "$@"
   fi
+}
+
+# ---- cleanup (design: 5.3) -------------------------------------------------------
+
+# 7d, 12h, 30m, 90s, 2w -> seconds.
+duration_seconds() {
+  local n="${1%[smhdw]}" unit="${1: -1}"
+  case "$n" in "" | *[!0-9]*) return 1 ;; esac
+  case "$unit" in
+    s) echo "$n" ;;
+    m) echo $((n * 60)) ;;
+    h) echo $((n * 3600)) ;;
+    d) echo $((n * 86400)) ;;
+    w) echo $((n * 604800)) ;;
+    *) return 1 ;;
+  esac
+}
+
+# Remove a directory tree, including read-only parts an agent may have left.
+remove_tree() {
+  chmod -R u+w "$1" 2>/dev/null || true
+  rm -rf "$1"
+}
+
+cmd_clean() {
+  local older=7d dry=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --older-than)
+        [ "$#" -ge 2 ] || die "usage: clankctl clean [--older-than 7d] [--dry-run]"
+        older="$2"
+        shift 2
+        ;;
+      -n | --dry-run) dry=true; shift ;;
+      *) die "usage: clankctl clean [--older-than 7d] [--dry-run]" ;;
+    esac
+  done
+  local secs cutoff
+  secs=$(duration_seconds "$older") || die "not a duration: $older (examples: 7d, 12h, 30m)"
+  cutoff=$(($(date +%s) - secs))
+
+  local d id state finished fin cleaned=0
+  for d in "$tasks"/t-*/; do
+    [ -f "$d/task.env" ] || continue
+    id=$(basename "$d")
+    [ -d "$d/worktree" ] || [ -e "$vm_dir/overlays/$id.qcow2" ] || continue
+    state=$(task_state "$id")
+    case "$state" in done | failed | stopped) ;; *) continue ;; esac
+    finished=$(jq -r '.finished // empty' "$d/status.json" 2>/dev/null || true)
+    fin=$(date -d "$finished" +%s 2>/dev/null) || continue
+    [ "$fin" -le "$cutoff" ] || continue
+    if [ "$dry" = true ]; then
+      echo "would clean $id ($state, finished $finished)"
+      continue
+    fi
+    if ! remove_tree "$d/worktree"; then
+      echo "clankctl: could not remove $d/worktree" >&2
+      continue
+    fi
+    rm -f "$vm_dir/overlays/$id.qcow2"
+    date -u +%Y-%m-%dT%H:%M:%SZ >"$d/pruned"
+    echo "cleaned $id ($state, finished $finished)"
+    cleaned=$((cleaned + 1))
+  done
+  [ "$dry" = true ] || echo "Cleaned $cleaned task(s)."
+  clean_images "$cutoff" "$dry"
+}
+
+# Devcontainer images (clankstation/dc-<project>:<hash>, and its -base image)
+# that no task with a worktree uses and that were built before the cutoff.
+# A project's next task rebuilds its image if it's gone.
+clean_images() {
+  local cutoff="$1" dry="$2" d id img created
+  local -A used=()
+  for d in "$tasks"/t-*/; do
+    [ -f "$d/task.env" ] || continue
+    id=$(basename "$d")
+    # A task still preparing is building an image right now: leave them all.
+    [ "$(task_state "$id")" != preparing ] || return 0
+    if [ -d "$d/worktree" ] && [ -s "$d/image" ]; then
+      used[$(cat "$d/image")]=1
+    fi
+  done
+  while read -r img; do
+    [ -n "$img" ] || continue
+    [ -z "${used[${img%-base}]:-}" ] || continue
+    created=$(docker image inspect -f '{{.Created}}' "$img" 2>/dev/null) || continue
+    [ "$(date -d "$created" +%s)" -le "$cutoff" ] || continue
+    if [ "$dry" = true ]; then
+      echo "would remove image $img"
+    elif docker image rm "$img" >/dev/null 2>&1; then
+      echo "removed image $img"
+    fi
+  done < <(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter 'reference=clankstation/dc-*')
+}
+
+cmd_delete() {
+  local id="${1:-}" t state
+  [ -n "$id" ] || die "usage: clankctl delete <task-id>"
+  t=$(task_dir "$id")
+  state=$(task_state "$id")
+  case "$state" in
+    running | preparing) die "task $id is $state (clankctl stop $id first)" ;;
+  esac
+  remove_tree "$t"
+  rm -f "$vm_dir/overlays/$id.qcow2"
+  echo "Deleted $id."
 }
 
 # ---- Windows base images (design: 5.5) ------------------------------------------
@@ -938,6 +1106,8 @@ case "${1:-}" in
   status) shift; cmd_status "$@" ;;
   show) shift; cmd_show "$@" ;;
   diff) shift; cmd_diff "$@" ;;
+  clean) shift; cmd_clean "$@" ;;
+  delete) shift; cmd_delete "$@" ;;
   -h | --help | help | "") usage ;;
   *) usage >&2; exit 1 ;;
 esac

@@ -1,6 +1,6 @@
 # Clankstation design
 
-Status: draft, OS layer. Last updated 2026-11-20.
+Status: draft, OS layer. Last updated 2026-11-21.
 
 ## 1. What Clankstation is
 
@@ -50,7 +50,10 @@ broad permissions inside their environment.
 | Code to Windows VMs | git over the libvirt network, not a file share (section 5.6) | Proposed: confirm at M9 |
 | Installer | Offline ISO with prebuilt systems + disko scripts for both layouts; disks chosen at install via fixed `/dev/clank-{boot,data}` links | Settled (M7) |
 | Windows base images | Unattended install from the user's ISO via an answer-file CD; generic key (unactivated) unless one is given; Secure Boot off + check bypass; TPM 2.0 via swtpm; local `agent` account; host drives VMs over OpenSSH | Settled (M8) |
-| Web stack, event protocol | Deferred to the service layer (section 8) | Open |
+| First client | Installable web app (PWA) served by the box. For phone and PC alike, and for non-technical users. Day one: queue, status, result; push on done/needs input; reply/keep going; terminal take-over in the browser | Settled (2026-11-20) |
+| Updates | Manual `clankctl update`: `nixos-rebuild switch --refresh --flake github:ryancole/clankstation/master?dir=src#<host>` (public repo, latest `master`). No update timer; the GUI triggers it later | Settled (M10) |
+| Task retention | A daily timer removes a finished task's worktree (and overlay) 7 days after it finished; results and logs stay until `clankctl delete` | Settled (M10) |
+| Web stack, event protocol, LAN HTTPS | Frontend/backend stack, API + streaming format, and how the box gets a trusted certificate (service workers and web push need HTTPS) | Open |
 
 ## 4. Architecture
 
@@ -115,8 +118,18 @@ Flakes only see git-tracked files. New files must be `git add`ed (or
 - Nix: flakes on, automatic store GC and optimisation on a timer.
 - One admin login account in the OS phase. The household user account is part
   of the service layer.
-- Updates: `nixos-rebuild switch --flake` from this repo's lock file. Later the
-  GUI triggers updates.
+- Updates (`src/modules/update.nix`): `clankctl update` rebuilds the box from
+  the flake on GitHub (`clankstation.update.flake`, default
+  `github:ryancole/clankstation/master?dir=src`), using the configuration it
+  was installed as (`clankstation.update.configuration`, set per host in
+  `flake.nix`; written to `/etc/clankstation/update.env`). It runs
+  `nixos-rebuild switch --refresh`, so pins come from the repo's lock file.
+  `--check` only compares the installed revision
+  (`system.configurationRevision`, from the flake's git revision) with the
+  latest. Manual only, never on a timer: running tasks survive the switch
+  (Docker `live-restore`), and a new kernel waits for a reboot, which
+  `clankctl update` points out. The dev VM has updates off; it's rebuilt from
+  the repo in WSL. Later the GUI triggers updates.
 
 ### 5.3 Storage layout
 
@@ -164,10 +177,19 @@ Directory tree, created with `systemd.tmpfiles`:
   cache/                      shared build caches (later)
 ```
 
-Cleanup: a systemd timer prunes finished tasks' worktrees and overlays after a
-retention period, runs `docker system prune` for unused images (Docker
-`autoPrune`), and never touches `base/` or `tools/` automatically. Results
-(`events.jsonl`, `result/`) are kept until the task is deleted.
+Cleanup (`src/modules/cleanup.nix`): the `clankstation-clean` timer runs
+`clankctl clean --older-than 7d` daily as the service user
+(`clankstation.cleanup.retention`, `.dates`). For each task that is done,
+failed or stopped and finished longer ago than that, it removes the worktree
+and any `vm/overlays/<task-id>.qcow2`, and writes the time to `pruned`. Such a
+task keeps its prompt, events, logs and `result/` (show and diff still work),
+but can't be resumed, attached or shelled into. Running, preparing and lost
+tasks are never touched. It also removes devcontainer images
+(`clankstation/dc-*`, with their `-base`) built before the cutoff that no task
+with a worktree uses; the next task of that project rebuilds its image.
+Docker `autoPrune` (weekly) removes dangling images and stopped containers.
+Nothing under `vm/base/` or `vm/tools/` is removed automatically.
+`clankctl delete <task-id>` removes a task entirely.
 
 Cloud installs (AWS, Azure) use the same split: a boot disk and an attached
 data disk, with cloud snapshots for backup. Windows task VMs need KVM inside the
@@ -383,7 +405,9 @@ clankctl resume <task-id> "<prompt>"    # keep going in the same session
 clankctl attach [--yes] <task-id>       # take over interactively
 clankctl stop <task-id>
 clankctl shell --task <task-id> [cmd]   # shell in the task's environment
-clankctl clean [--older-than 7d]        # M10
+clankctl clean [--older-than 7d] [--dry-run]   # also run daily by a timer
+clankctl delete <task-id>               # remove a task, results included
+clankctl update [--check]               # rebuild the box from GitHub
 ```
 
 Task containers are started detached (`docker run --detach --rm`), so dockerd
@@ -441,7 +465,11 @@ layer.
   build except Windows itself: libvirt, swtpm, the `clank` network, Docker's
   forward policy, data-disk growth, and a dry-run `build-base` (valid answer
   file, answer CD contents, a domain libvirt accepts and boots to firmware).
-  The real Windows install runs on the box.
+  The real Windows install runs on the box. `m10-cleanup-update` runs the
+  cleanup timer's service against old, recent and running tasks and
+  devcontainer images, checks that a cleaned task keeps its results, and
+  checks `clankctl update` against stub `nix` and `nixos-rebuild` (no
+  network). A real update is checked on an installed box.
 - Windows VM milestones need real hardware, or libvirt running directly in WSL.
   Windows inside build-vm inside WSL is too many layers of nesting to be usable.
   A Hyper-V Gen 2 VM with nested virtualization works as a stand-in box:
@@ -473,7 +501,7 @@ Each milestone ends with a check in the VM.
 | M7 | Installer ISO (moved up from M9 so the Windows milestones can run on real hardware) | The ISO installs offline in a VM test, and on the real box: it boots and takes SSH with the installed key. Done: also installed on a Hyper-V Gen 2 VM (two disks, nested virtualization, `/dev/kvm` present) |
 | M8 | libvirt and unattended Windows base image | A base image builds from a user ISO with no clicks (real hardware). Done: Windows 11 Pro + VS 2026 Build Tools built unattended on the Hyper-V box |
 | M9 | Windows tasks: overlays, git sync, harness. **Shelved** (2026-11-21) until the box's RAM/storage upgrade; first step when resumed: a Windows Server 2025 Core base image that just boots and takes SSH | M4's check passes against a Windows template |
-| M10 | Cleanup timers and updates | Old tasks and overlays get pruned; the box updates from this repo |
+| M10 | Cleanup timers and updates | Old tasks and overlays get pruned; the box updates from this repo. Cleanup done (`m10-cleanup-update`); `clankctl update` checked against stubs, real update from GitHub still to be checked on the box |
 
 M4 is the brief's first milestone ("send a prompt and come back to a finished
 diff"), driven from the CLI instead of the browser.
@@ -499,7 +527,6 @@ format, how needs-input tasks are shown and answered.
   screenshots will show the error.
 - How harness install and sign-in work in Windows VMs (5.7), given that the
   Linux home volume can't simply be shared.
-- Retention defaults for finished tasks and overlays.
 - Upgrade disko when a release newer than v1.13.0 ships. That release should
   have the test-driver fix (then drop the `machine.shutdown()` workaround in
   `src/tests/m1-storage.nix`) and the changes needed for NixOS 26.11.
