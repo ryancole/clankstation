@@ -6,10 +6,10 @@ architecture, the decisions table and the milestones.
 
 ## Current phase
 
-OS milestones M0–M8 are done (see the milestones table in `docs/design.md`).
+OS milestones M0–M8 and M10 are done (see the milestones table in `docs/design.md`).
 Windows tasks (M9) are **shelved** by the user until the box gets more RAM and
-storage; don't work on Windows unless asked. M10 (cleanup timers, updates) is
-built; a real `clankctl update` from GitHub still needs checking on the box. Next is the service layer (web GUI, API, task queue, worker event
+storage; don't work on Windows unless asked. The box updates
+itself with `clankctl update` (from GitHub `master`). Next is the service layer (web GUI, API, task queue, worker event
 protocol), starting with the web stack decision, which is the user's to make.
 Develop and test it on the WSL dev VM.
 
