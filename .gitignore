@@ -7,3 +7,5 @@ result-*
 
 # Built artifacts copied out of WSL (installer ISO)
 out/
+# EFI variables the dev VM writes into its working directory
+*-efi-vars.fd

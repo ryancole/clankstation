@@ -88,6 +88,8 @@
       packages.${system} = {
         # nix build ./src#installer-iso  ->  result/iso/clankstation-installer-*.iso
         installer-iso = self.nixosConfigurations.installer.config.system.build.isoImage;
+        # nix build ./src#clank-web  (the web service, its app embedded)
+        clank-web = pkgs.callPackage ./pkgs/clank-web { };
       };
 
       checks.${system} = {
@@ -100,6 +102,7 @@
         m7-installer = import ./tests/m7-installer.nix { inherit self pkgs; };
         m8-windows-plumbing = import ./tests/m8-windows-plumbing.nix { inherit self pkgs; };
         m10-cleanup-update = import ./tests/m10-cleanup-update.nix { inherit self pkgs; };
+        s1-web = import ./tests/s1-web.nix { inherit self pkgs; };
       }
       // import ./tests/m1-storage.nix { inherit self pkgs disko; };
 

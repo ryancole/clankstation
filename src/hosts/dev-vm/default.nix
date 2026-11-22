@@ -21,6 +21,15 @@ in
 {
   clankstation.storage.dataDisk = "/dev/vdb";
 
+  # The web service (S1, no login yet): dev VM only. From the WSL side:
+  # http://localhost:8080 (also from Windows, through WSL's localhost
+  # forwarding).
+  clankstation.web = {
+    enable = true;
+    address = "0.0.0.0";
+    openFirewall = true;
+  };
+
   virtualisation.vmVariantWithDisko = {
     disko.devices.disk = {
       main.imageSize = "16G";
@@ -37,6 +46,11 @@ in
           from = "host";
           host.port = 2222;
           guest.port = 22;
+        }
+        {
+          from = "host";
+          host.port = 8080;
+          guest.port = 8080;
         }
       ];
     };

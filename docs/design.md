@@ -54,7 +54,7 @@ broad permissions inside their environment.
 | Updates | Manual `clankctl update`: `nixos-rebuild switch --refresh --flake github:ryancole/clankstation/master?dir=src#<host>` (public repo, latest `master`). No update timer; the GUI triggers it later | Settled (M10) |
 | Task retention | A daily timer removes a finished task's worktree (and overlay) 7 days after it finished; results and logs stay until `clankctl delete` | Settled (M10) |
 | Web stack | Backend in Go (one static binary, `buildGoModule`; creack/pty for the terminal, a web push library, standard `net/http`). Frontend: a Svelte 5 single-page PWA built with Vite (`buildNpmPackage`), embedded in the binary; xterm.js for the browser terminal. Everything from the pinned nixpkgs, no new flake inputs. The service calls `clankctl` for task changes at first and reads the task files directly. Chosen over Rust mainly for build time and RAM: the box builds its own updates | Settled (2026-11-21) |
-| API and event protocol | REST + JSON for actions. Server-Sent Events for live task events, with the event's sequence number as the SSE `id` so a reconnect resumes where it left off. One WebSocket per browser terminal. Raw harness output stays in `events.jsonl` as the record; the harness adapter (section 6) turns it into a small versioned Clankstation stream (`{v:1, seq, time, task, type: state/step/message/plan/result, ...}`), and the GUI depends only on that | Settled (2026-11-21) |
+| API and event protocol | REST + JSON for actions. Server-Sent Events for live task events, with the event's sequence number as the SSE `id` so a reconnect resumes where it left off. One WebSocket per browser terminal. Raw harness output stays in `events.jsonl` as the record; the harness adapter (section 6) turns it into a small versioned Clankstation stream (`{v:1, seq, type: turn/message/step/step_result/plan/result/state, ...}`, where `seq` is the `events.jsonl` line number), and the GUI depends only on that | Settled (2026-11-21) |
 | HTTPS and remote access | Default: Tailscale (`services.tailscale` from nixpkgs, no new flake input). The app is served at the box's `*.ts.net` name with Tailscale's Let's Encrypt certificate, the same name at home and away (the PWA, service worker and push subscriptions are tied to one origin). The owner signs in to Tailscale through its own flow. Alternative, documented: the owner's own domain with an ACME DNS-01 certificate (`security.acme`), where the owner handles reachability (port forward, split DNS). LAN-only fallback: a box-local CA, name-constrained to the box, installed per device (also used on the dev VM). Not offered: tunnel services that terminate TLS (they would see the terminal during harness sign-in). Reachable from outside the home means the GUI always requires a household login | Settled (2026-11-21) |
 
 ## 4. Architecture
@@ -508,16 +508,37 @@ Each milestone ends with a check in the VM.
 M4 is the brief's first milestone ("send a prompt and come back to a finished
 diff"), driven from the CLI instead of the browser.
 
-## 8. Service layer (later)
+## 8. Service layer
 
-Built on the OS once M4 or so is solid. Covers: the web GUI for non-technical
-users, the API, the task queue and concurrency limits, the worker service inside
-each environment with a versioned event protocol, the monitoring view, web push
-notifications, plain-language result pages with actions (open PR, keep going),
-and the browser terminal. Decisions needed then: web stack, event protocol
-format, how needs-input tasks are shown and answered.
+Covers: the web GUI for non-technical users, the API, the task queue and
+concurrency limits, the worker service inside each environment with a
+versioned event protocol, the monitoring view, web push notifications,
+plain-language result pages with actions (open PR, keep going), and the
+browser terminal. Stack, protocol and HTTPS are in the decisions table.
 
 The GUI's screens, flows and plain-language wording are in `docs/gui.md`.
+
+`clank-web` (`src/pkgs/clank-web`, module `src/modules/web.nix`): Go,
+standard library only, with the Svelte app (`ui/`) built by
+`buildNpmPackage` and embedded. It runs as `clankstation`, reads the task
+files and asks the Docker socket which task containers are running. API v1
+and the event envelope are documented at the top of `api.go` and
+`adapter.go`. Off by default; the dev VM enables it on port 8080, forwarded
+to `http://localhost:8080` in WSL (and Windows).
+
+### 8.1 Milestones (service layer)
+
+Each is verified on the dev VM (and a NixOS VM test where it fits).
+
+| # | Milestone | Done when |
+|---|---|---|
+| S1 | Read-only service: Go binary serving the embedded Svelte app, NixOS module, systemd unit as `clankstation`. Home, task page, Changes; live events over SSE through the Claude Code adapter. Enabled on the dev VM only until S5 adds login | A task started with `clankctl run` shows up in a browser on the dev VM and updates live while it works. Done: `s1-web` VM test (API, SSE resume, needs-input, changes); on the dev VM a real Claude Code task showed live steps, then its question, summary and diff, and the page reconnected after the service restarted |
+| S2 | Actions: new task, reply, stop, projects (through `clankctl`) | A task can be queued and continued from the browser alone |
+| S3 | Browser terminal: take over (WebSocket + PTY), Claude install and sign-in from Settings | Take over and hand back work from the browser |
+| S4 | Queue and concurrency limit (`queued` state) | With a limit of 1, a second task waits, then starts on its own |
+| S5 | Login, Tailscale, HTTPS, installable PWA | Installed on a phone, reachable away from home, login required |
+| S6 | Web push | The phone gets "Done" and "Claude has a question" |
+| S7 | Box settings: updates, storage | "Update now" works from the GUI |
 
 ## 9. Open questions
 

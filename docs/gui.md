@@ -40,7 +40,9 @@ The box already knows these per task (`clankctl`'s `task_state` and
 **Needs your answer** is the one state the box doesn't record today. In headless
 mode Claude Code can't stop mid-turn to ask; it ends the turn, and its final
 message is the question. First version: a finished turn whose summary's last
-paragraph ends with `?` is shown as *Needs your answer*. Every finished task
+paragraph contains a question (a `?` ending a sentence, outside code and
+URLs, as in "Do you want a fourth fact? If so, …") is shown as *Needs your
+answer*. Every finished task
 can be replied to anyway, so a wrong guess costs nothing. How this is detected
 long-term belongs to the event protocol decision.
 
@@ -164,7 +166,7 @@ Details list come from these events:
 | tool `Edit`, `Write`, `NotebookEdit` | "Editing `<file>`" / "Creating `<file>`" |
 | tool `Bash` | Its `description` input when present ("Run the tests"), else "Running a command" |
 | tool `WebSearch`, `WebFetch` | "Looking things up online" |
-| to-do tool (`TodoWrite`, or the newer task tools) | Updates the Plan checklist; not shown as a step |
+| to-do tool (`TodoWrite`, or the newer task tools) | Updates the Plan checklist; not shown as a step. Headless Claude Code currently offers no to-do tool (seen on the dev VM, S1), so the Plan list stays empty for now; Claude writes its list as text instead |
 | tool `Task` / `Agent` | "Working on a side task: `<description>`" |
 | any other tool | "Using `<name>`" |
 | `user` tool result with an error | Step marked with a small warning, detail in Details |

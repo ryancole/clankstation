@@ -9,5 +9,6 @@
     ./clankctl.nix
     ./cleanup.nix
     ./update.nix
+    ./web.nix
   ];
 }
