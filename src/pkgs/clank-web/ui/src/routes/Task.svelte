@@ -55,6 +55,13 @@
     }
   }
 
+  function takeOver() {
+    if (cur === 'running' && !confirm(
+      'Claude is working on this right now. Taking over stops that and lets you continue the same conversation yourself.',
+    )) return;
+    location.hash = `#/terminal/attach/${encodeURIComponent(id)}`;
+  }
+
   const replyHint = $derived(
     {
       failed: 'Try again, or say what to do differently',
@@ -203,10 +210,15 @@
         </section>
       {/if}
 
-      {#if cur === 'running'}
+      {#if cur === 'running' && !task.terminal}
         {#if actionError}<p class="error-box" role="alert">{actionError}</p>{/if}
         <div class="actions">
           <button class="btn" onclick={stop} disabled={!!busy}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</button>
+          <button class="btn dark" onclick={takeOver} disabled={!!busy}>Take over</button>
+        </div>
+      {:else if cur === 'interactive' || task.terminal}
+        <div class="actions">
+          <a class="btn dark" href={`#/terminal/attach/${encodeURIComponent(id)}`}>Open the terminal</a>
         </div>
       {/if}
     {:else}
@@ -256,6 +268,12 @@
         <section class="card reply-card">
           {@render replyForm('Tell Claude what to do next')}
         </section>
+      {/if}
+      {#if !task.archived}
+        <button class="btn take-over" onclick={takeOver}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"></path></svg>
+          Take over in a terminal
+        </button>
       {/if}
     {/if}
 
@@ -342,6 +360,8 @@
 
   .actions { display: flex; gap: 10px; margin: 22px 0; }
   .actions .btn { flex: 1 1 0; }
+  .btn.dark { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .take-over { width: 100%; margin-top: 4px; }
   .reply-card { padding: 16px; }
   .reply { display: flex; flex-direction: column; gap: 10px; }
   .reply label { font-size: 15px; font-weight: 600; }

@@ -1,11 +1,12 @@
 <script>
-  import { listProjects, newTask } from '../lib/api.js';
+  import { listProjects, newTask, getClaude } from '../lib/api.js';
 
   let projects = $state(null);
   let project = $state('');
   let prompt = $state('');
   let busy = $state(false);
   let error = $state('');
+  let claude = $state(null);
 
   $effect(() => {
     listProjects()
@@ -14,6 +15,9 @@
         if (!project && projects.length) project = projects[0].name;
       })
       .catch(() => (error = "Can't reach the box right now."));
+    getClaude()
+      .then((c) => (claude = c))
+      .catch(() => {});
   });
 
   async function start(e) {
@@ -38,6 +42,13 @@
     </a>
     <h1>New task</h1>
   </div>
+
+  {#if claude && (!claude.installed || !claude.signed_in)}
+    <p class="notice" role="alert">
+      {claude.installed ? 'Claude is not signed in on the box yet.' : "Claude isn't set up on the box yet."}
+      <a href="#/settings">{claude.installed ? 'Sign in' : 'Set it up'} in Settings</a>
+    </p>
+  {/if}
 
   {#if projects === null && !error}
     <p class="empty">Loading…</p>
@@ -101,6 +112,8 @@
   .choice-name { font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
   .small { font-size: 13px; }
   .add { color: var(--accent); font-weight: 500; }
+  .notice { background: var(--needs-bg); color: var(--needs-fg); border-radius: 12px; padding: 12px 14px; font-size: 15px; line-height: 1.4; margin: 0 0 16px; }
+  .notice a { color: inherit; font-weight: 600; }
   .empty { display: flex; flex-direction: column; align-items: center; gap: 16px; }
   .empty p { margin: 0; }
 </style>

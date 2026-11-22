@@ -15,6 +15,12 @@ package main
 //   POST /api/tasks/{id}/reply   {prompt}
 //   POST /api/tasks/{id}/stop
 //   POST /api/projects           {name, url}
+//
+// Terminals and Claude (S3):
+//   GET /api/claude              Claude Code installed / signed in (claude.go)
+//   GET /api/terminals           open terminal sessions [{kind, task}]
+//   GET /api/terminal/{kind}     WebSocket; kind attach (?task=<id>), login,
+//                                install (terminal.go has the protocol)
 
 import (
 	"encoding/json"
@@ -34,6 +40,53 @@ import (
 
 func newServer(s *Store, c *Clankctl, ui fs.FS) http.Handler {
 	mux := http.NewServeMux()
+	claude := &claudeCache{}
+	terms := NewTerminals(c, func(kind, task string) {
+		s.invalidate()
+		if kind != "attach" {
+			claude.invalidate()
+		}
+	})
+	mux.HandleFunc("GET /api/claude", func(w http.ResponseWriter, r *http.Request) {
+		st, err := claude.get(r.Context(), c)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, st)
+	})
+	mux.HandleFunc("GET /api/terminals", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, terms.List())
+	})
+	mux.HandleFunc("GET /api/terminal/{kind}", func(w http.ResponseWriter, r *http.Request) {
+		kind, task := r.PathValue("kind"), r.URL.Query().Get("task")
+		// Check before starting anything: taking over stops a running task.
+		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			http.Error(w, "expected a WebSocket", http.StatusBadRequest)
+			return
+		}
+		if !sameOrigin(w, r) {
+			return
+		}
+		if kind == "attach" {
+			d, ok := s.Get(task)
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			if d.Archived && !terms.Has("attach", task) {
+				http.Error(w, "this task was cleaned up", http.StatusConflict)
+				return
+			}
+		}
+		sess, err := terms.Open(kind, task)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.invalidate()
+		terms.ServeWS(w, r, sess)
+	})
 	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) {
 		ps := s.Projects()
 		for i := range ps {
@@ -110,6 +163,7 @@ func newServer(s *Store, c *Clankctl, ui fs.FS) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		d.Terminal = terms.Has("attach", d.ID)
 		writeJSON(w, d)
 	})
 	mux.HandleFunc("GET /api/tasks/{id}/changes", func(w http.ResponseWriter, r *http.Request) {

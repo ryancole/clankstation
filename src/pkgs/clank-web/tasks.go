@@ -182,6 +182,8 @@ type TaskDetail struct {
 	Turns    []Turn  `json:"turns"`
 	Files    []File  `json:"files"`
 	Status   *Status `json:"status,omitempty"`
+	// A take-over terminal is open in the service (S3).
+	Terminal bool `json:"terminal"`
 }
 
 func (s *Store) invalidate() {

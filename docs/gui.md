@@ -65,7 +65,7 @@ Each card shows:
 
 A large **New task** button sits at the bottom (thumb reach on a phone; top
 right on a PC). Empty state: "Nothing yet. Give Claude its first task."
-Until Settings exists (S3), a **Projects** link sits in the top bar.
+A settings button (gear) sits in the top bar.
 
 Data: `tasks/*/task.env`, `prompts.log`, the task state, `result/summary.md`,
 and the tail of `events.jsonl` for the activity line.
@@ -82,8 +82,7 @@ and the tail of `events.jsonl` for the activity line.
 
 No other fields on day one. Branch, template and base commit stay as
 `clankctl` defaults. If Claude isn't set up or signed in, this screen says so
-and links to Settings instead of letting a task fail (with Settings, S3;
-until then Start shows clankctl's own message).
+and links to Settings instead of letting a task fail.
 
 ### 3.3 Task page
 
@@ -98,7 +97,7 @@ One page per task that changes with its state. From the top:
     items show progress without any guessing.
   - **What Claude is saying:** its latest message text.
   - Buttons: **Stop** (asks first: "Its work so far is kept, and you can tell
-    Claude to keep going later"), **Take over** (S3).
+    Claude to keep going later"), **Take over**.
 - **When finished:**
   - **Summary:** `result/summary.md` rendered as formatted text.
   - **What changed:** "3 files changed" with each file name and a small
@@ -127,14 +126,19 @@ files say "New file", deleted files "Deleted". Wide lines wrap. Source:
 
 - Before opening, if the task is working: "Claude is working on this right
   now. Taking over stops that and lets you continue the same conversation
-  yourself." **Take over** / **Cancel**. (The same rule as `clankctl attach`:
+  yourself." **OK** / **Cancel**. (The same rule as `clankctl attach`:
   the harness is never driven by two things at once.)
 - Then a full-screen terminal running `claude --resume <session-id>` in the
   task's environment: Claude Code's own interactive screen, unmodified.
-- On a phone: an extra key row (Esc, Tab, Ctrl, arrows, Enter) above the
-  keyboard.
-- **Done, hand back** at the top ends the session. The page returns to the
-  task, whose changes are refreshed.
+- On a phone: an extra key row (Esc, Tab, Ctrl, arrows) above the keyboard.
+  Ctrl applies to the next key typed.
+- **Done, hand back** at the top ends the session (Claude Code's own
+  `/exit`). The page returns to the task, whose changes are refreshed.
+- Going back without handing back leaves the session open: the task shows
+  *You're in control* and **Open the terminal**, and the screen comes back as
+  it was. After 30 minutes with no page open, the box hands it back itself.
+- Known gap: a take-over writes no events, so the task's summary stays the
+  one from the last automatic turn. History shows "You took over".
 
 ### 3.6 Projects
 
@@ -149,11 +153,12 @@ add`; a failed clone shows git's message under "Details".
   and **Sign in**, which opens a browser terminal running Claude's own sign-in
   (`claude auth login`). The app only carries keystrokes to and from that
   terminal. It never reads, logs or stores what passes through it.
-- **Notifications:** on/off for this device, with a test button. On iPhone,
+  (Built in S3. Settings also links to Projects.)
+- **Notifications (S6):** on/off for this device, with a test button. On iPhone,
   a note that notifications need the app installed to the home screen first.
 - **Install the app:** instructions for this browser (Add to Home Screen /
   Install).
-- **The box:** current version, **Check for updates**, **Update now**
+- **The box (S7):** current version, **Check for updates**, **Update now**
   (`clankctl update`), with a warning when a restart is needed for a new
   kernel. Free space on the data disk.
 

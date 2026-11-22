@@ -23,7 +23,7 @@ let
     };
     # After changing package-lock.json:
     #   nix run nixpkgs/nixos-26.05#prefetch-npm-deps -- ui/package-lock.json
-    npmDepsHash = "sha256-PgfwhXwhOoolgJad4E6DZhhq5wvwsO7H6t9uKrL7Dhk=";
+    npmDepsHash = "sha256-Tb787W1vyd5Mgbc7nQKiRBp1ysmbE76YisXU3Qi7jFg=";
     installPhase = ''
       runHook preInstall
       cp -r dist $out
@@ -36,15 +36,17 @@ buildGoModule {
   inherit version;
   src = lib.fileset.toSource {
     root = ./.;
-    fileset = lib.fileset.fileFilter (f: f.hasExt "go" || f.name == "go.mod") ./.;
+    fileset = lib.fileset.fileFilter (f: f.hasExt "go" || f.name == "go.mod" || f.name == "go.sum") ./.;
   };
-  # Standard library only, so no dependencies to vendor.
-  vendorHash = null;
+  # After changing go.mod or go.sum: set lib.fakeHash, build, copy the hash.
+  vendorHash = "sha256-LjM5B6PRL6rNAJ43+RBzKmRsPTNgE+TMeLkUfOVidqs=";
   env.CGO_ENABLED = 0;
   preBuild = ''
     mkdir -p ui
     cp -r ${ui} ui/dist
   '';
+  # Fetching the Go modules doesn't need the web app.
+  overrideModAttrs = _: { preBuild = ""; };
 
   passthru = { inherit ui; };
 

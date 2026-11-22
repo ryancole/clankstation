@@ -55,6 +55,8 @@ broad permissions inside their environment.
 | Task retention | A daily timer removes a finished task's worktree (and overlay) 7 days after it finished; results and logs stay until `clankctl delete` | Settled (M10) |
 | Web stack | Backend in Go (one static binary, `buildGoModule`; creack/pty for the terminal, a web push library, standard `net/http`). Frontend: a Svelte 5 single-page PWA built with Vite (`buildNpmPackage`), embedded in the binary; xterm.js for the browser terminal. Everything from the pinned nixpkgs, no new flake inputs. The service calls `clankctl` for task changes at first and reads the task files directly. Chosen over Rust mainly for build time and RAM: the box builds its own updates | Settled (2026-11-21) |
 | API and event protocol | REST + JSON for actions. Server-Sent Events for live task events, with the event's sequence number as the SSE `id` so a reconnect resumes where it left off. One WebSocket per browser terminal. Raw harness output stays in `events.jsonl` as the record; the harness adapter (section 6) turns it into a small versioned Clankstation stream (`{v:1, seq, type: turn/message/step/step_result/plan/result/state, ...}`, where `seq` is the `events.jsonl` line number), and the GUI depends only on that | Settled (2026-11-21) |
+| Sign-in from the browser | Settings' **Sign in** opens a browser terminal running Claude's own `claude auth login`. The one-time code the user pastes passes through `clank-web`'s WebSocket to Claude Code, relayed only: never logged, stored or read, as SSH relays it for `clankctl login claude` | Settled (2026-11-22) |
+| Go dependencies | `clank-web` may use outside Go modules, pinned in `go.sum` (not flake inputs). First two, for the browser terminal (S3): `creack/pty` and `coder/websocket` | Settled (2026-11-22) |
 | HTTPS and remote access | Default: Tailscale (`services.tailscale` from nixpkgs, no new flake input). The app is served at the box's `*.ts.net` name with Tailscale's Let's Encrypt certificate, the same name at home and away (the PWA, service worker and push subscriptions are tied to one origin). The owner signs in to Tailscale through its own flow. Alternative, documented: the owner's own domain with an ACME DNS-01 certificate (`security.acme`), where the owner handles reachability (port forward, split DNS). LAN-only fallback: a box-local CA, name-constrained to the box, installed per device (also used on the dev VM). Not offered: tunnel services that terminate TLS (they would see the terminal during harness sign-in). Reachable from outside the home means the GUI always requires a household login | Settled (2026-11-21) |
 
 ## 4. Architecture
@@ -527,9 +529,17 @@ change (new task, reply, stop, add project) runs `clankctl` as the same
 user, with prompts on stdin; clankctl stays the one writer of the data
 tree. API v1 and the event envelope are documented at the top of `api.go`
 and `adapter.go`. Actions only accept same-origin JSON POSTs, so other web
-pages can't drive the box; that is not a login (S5). Off by default; the
-dev VM enables it on port 8080, forwarded to `http://localhost:8080` in WSL
-(and Windows).
+pages can't drive the box; that is not a login (S5). Browser terminals
+(`terminal.go`) run `clankctl attach --yes`, `clankctl login claude` or
+`clankctl harness enable claude` under a PTY and relay it over a WebSocket.
+A session outlives the page (a phone that sleeps reconnects and gets the
+screen back); **Done, hand back** sends Esc and `/exit` to Claude Code, so
+`clankctl attach` ends normally and refreshes the diff. Sessions nobody has
+looked at for 30 minutes (10 for sign-in and install) are ended the same way.
+Settings reads Claude's state from `clankctl harness status` and passes on
+only installed, version, signed in, method and plan (not the account's email
+or organization). Off by default; the dev VM enables it on port 8080,
+forwarded to `http://localhost:8080` in WSL (and Windows).
 
 ### 8.1 Milestones (service layer)
 
@@ -539,7 +549,7 @@ Each is verified on the dev VM (and a NixOS VM test where it fits).
 |---|---|---|
 | S1 | Read-only service: Go binary serving the embedded Svelte app, NixOS module, systemd unit as `clankstation`. Home, task page, Changes; live events over SSE through the Claude Code adapter. Enabled on the dev VM only until S5 adds login | A task started with `clankctl run` shows up in a browser on the dev VM and updates live while it works. Done: `s1-web` VM test (API, SSE resume, needs-input, changes); on the dev VM a real Claude Code task showed live steps, then its question, summary and diff, and the page reconnected after the service restarted |
 | S2 | Actions: new task, reply, stop, projects (through `clankctl`) | A task can be queued and continued from the browser alone. Done: `s2-actions` VM test (add project, new task, answer, stop and keep going, continue a lost task, cross-site refusal); on the dev VM a real Claude Code task was started from New task, asked its question, and finished after a reply sent from the task page |
-| S3 | Browser terminal: take over (WebSocket + PTY), Claude install and sign-in from Settings | Take over and hand back work from the browser |
+| S3 | Browser terminal: take over (WebSocket + PTY), Claude install and sign-in from Settings | Take over and hand back work from the browser. Done: `s3-terminal` VM test (take over a working task, leave and reconnect, hand back with the diff refreshed, sign-in code not in the service's log, Claude status without the email); on the dev VM, real Claude Code was taken over mid-task from the browser, given an instruction, and handed back with its file in the changes |
 | S4 | Queue and concurrency limit (`queued` state) | With a limit of 1, a second task waits, then starts on its own |
 | S5 | Login, Tailscale, HTTPS, installable PWA | Installed on a phone, reachable away from home, login required |
 | S6 | Web push | The phone gets "Done" and "Claude has a question" |

@@ -78,3 +78,10 @@ export const addProject = (name, url) => postJSON('/api/projects', { name, url }
 export const newTask = (project, prompt) => postJSON('/api/tasks', { project, prompt });
 export const reply = (id, prompt) => postJSON(`/api/tasks/${encodeURIComponent(id)}/reply`, { prompt });
 export const stopTask = (id) => postJSON(`/api/tasks/${encodeURIComponent(id)}/stop`);
+
+export async function getClaude() {
+  const r = await fetch('/api/claude', { headers: { Accept: 'application/json' } });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(data?.error ?? "Couldn't check Claude on the box.");
+  return data;
+}
