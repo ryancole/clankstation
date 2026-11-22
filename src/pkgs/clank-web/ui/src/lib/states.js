@@ -2,7 +2,7 @@
 
 const STATES = {
   queued: { label: 'Waiting in line', tone: 'idle', group: 'working',
-    sentence: 'It starts when another task finishes.' },
+    sentence: 'It starts by itself when a task ahead of it finishes.' },
   preparing: { label: 'Getting ready', tone: 'working', group: 'working',
     sentence: "Setting up the project's tools. This can take a few minutes the first time." },
   running: { label: 'Working', tone: 'working', group: 'working', sentence: '' },
@@ -13,7 +13,7 @@ const STATES = {
   failed: { label: 'Something went wrong', tone: 'bad', group: 'needs',
     sentence: "Claude couldn't finish this task." },
   stopped: { label: 'Stopped', tone: 'idle', group: 'done',
-    sentence: 'Stopped before it finished. Its work so far is kept.' },
+    sentence: 'Stopped before it finished. Its work so far is kept. Tell Claude to keep going when you like.' },
   lost: { label: 'Interrupted', tone: 'bad', group: 'needs',
     sentence: 'The box restarted while this was working.' },
 };

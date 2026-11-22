@@ -2,8 +2,6 @@ package main
 
 // Browser terminals (S3): a clankctl command under a PTY, relayed over a
 // WebSocket. Kinds:
-//   attach   clankctl attach --yes <task>   take over a task (Claude Code's
-//                                          own interactive screen)
 //   login    clankctl login claude          Claude's own sign-in
 //   install  clankctl harness enable claude the official installer
 //
@@ -34,8 +32,7 @@ import (
 
 const (
 	scrollbackBytes = 256 << 10
-	idleAttach      = 30 * time.Minute // no page open: hand the task back
-	idleOther       = 10 * time.Minute // no page open: end a sign-in or install
+	idleLimit       = 10 * time.Minute // no page open: end the session
 )
 
 type Terminals struct {
@@ -67,11 +64,8 @@ func NewTerminals(c *Clankctl, onExit func(kind, task string)) *Terminals {
 
 func termArgs(kind, task string) ([]string, bool) {
 	switch kind {
-	case "attach":
-		if !taskIDPattern.MatchString(task) {
-			return nil, false
-		}
-		return []string{"attach", "--yes", task}, true
+	// No "attach": taking over is out of the app for now (design section 3,
+	// "Queue and concurrency"); nothing may interrupt a run or skip the line.
 	case "login":
 		return []string{"login", "claude"}, true
 	case "install":
@@ -88,9 +82,7 @@ func (t *Terminals) Open(kind, task string) (*Session, error) {
 	if !ok {
 		return nil, &ActionError{"Unknown terminal."}
 	}
-	if kind != "attach" {
-		task = ""
-	}
+	task = "" // one session per kind
 	key := sessionKey(kind, task)
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -209,9 +201,8 @@ func (s *Session) unsubscribe(ch chan []byte) {
 
 func (s *Session) write(b string) { _, _ = s.pty.Write([]byte(b)) }
 
-// End finishes the session the way a person would. Taking over: interrupt
-// Claude, then /exit, so clankctl hands the task back with its diff
-// refreshed. A sign-in or install: Ctrl-C. Then harder, if it hangs.
+// End finishes the session the way a person would (Ctrl-C), then harder if
+// it hangs.
 func (s *Session) End() {
 	s.mu.Lock()
 	if s.ending {
@@ -224,18 +215,10 @@ func (s *Session) End() {
 		wait time.Duration
 		do   func()
 	}
-	var steps []step
-	if s.kind == "attach" {
-		steps = []step{
-			{0, func() { s.write("\x1b") }},                             // Esc: stop what Claude is doing
-			{400 * time.Millisecond, func() { s.write("\x15/exit\r") }}, // clear the input, /exit
-			{15 * time.Second, func() { s.write("\x03") }},              // Ctrl-C twice quits
-			{500 * time.Millisecond, func() { s.write("\x03") }},
-		}
-	} else {
-		steps = []step{{0, func() { s.write("\x03") }}}
+	steps := []step{
+		{0, func() { s.write("\x03") }},
+		{15 * time.Second, func() { _ = s.cmd.Process.Signal(syscall.SIGTERM) }},
 	}
-	steps = append(steps, step{15 * time.Second, func() { _ = s.cmd.Process.Signal(syscall.SIGTERM) }})
 	go func() {
 		for _, st := range steps {
 			select {
@@ -255,11 +238,7 @@ func (t *Terminals) reap() {
 		var idle []*Session
 		for _, s := range t.sessions {
 			s.mu.Lock()
-			limit := idleOther
-			if s.kind == "attach" {
-				limit = idleAttach
-			}
-			if s.sub == nil && time.Since(s.lastSeen) > limit {
+			if s.sub == nil && time.Since(s.lastSeen) > idleLimit {
 				idle = append(idle, s)
 			}
 			s.mu.Unlock()

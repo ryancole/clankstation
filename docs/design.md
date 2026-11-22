@@ -57,6 +57,7 @@ broad permissions inside their environment.
 | API and event protocol | REST + JSON for actions. Server-Sent Events for live task events, with the event's sequence number as the SSE `id` so a reconnect resumes where it left off. One WebSocket per browser terminal. Raw harness output stays in `events.jsonl` as the record; the harness adapter (section 6) turns it into a small versioned Clankstation stream (`{v:1, seq, type: turn/message/step/step_result/plan/result/state, ...}`, where `seq` is the `events.jsonl` line number), and the GUI depends only on that | Settled (2026-11-21) |
 | Sign-in from the browser | Settings' **Sign in** opens a browser terminal running Claude's own `claude auth login`. The one-time code the user pastes passes through `clank-web`'s WebSocket to Claude Code, relayed only: never logged, stored or read, as SSH relays it for `clankctl login claude` | Settled (2026-11-22) |
 | Go dependencies | `clank-web` may use outside Go modules, pinned in `go.sum` (not flake inputs). First two, for the browser terminal (S3): `creack/pty` and `coder/websocket` | Settled (2026-11-22) |
+| Queue and concurrency (S4) | The queue lives in `clankctl`, shared by the CLI and the web app: `run` and `resume` mark a task `queued` (a file in its task folder) when the box is at its limit, and a small systemd service starts the next one when a slot frees, so it keeps working while `clank-web` restarts. The limit is runtime state under `/var/lib/clankstation`, default 1. Nothing jumps the line or interrupts a run. **Take over is removed from the app for now** (the S3 terminal stays for Settings' install and sign-in; `clankctl attach` over SSH still works) | Settled (2026-11-22) |
 | HTTPS and remote access | Default: Tailscale (`services.tailscale` from nixpkgs, no new flake input). The app is served at the box's `*.ts.net` name with Tailscale's Let's Encrypt certificate, the same name at home and away (the PWA, service worker and push subscriptions are tied to one origin). The owner signs in to Tailscale through its own flow. Alternative, documented: the owner's own domain with an ACME DNS-01 certificate (`security.acme`), where the owner handles reachability (port forward, split DNS). LAN-only fallback: a box-local CA, name-constrained to the box, installed per device (also used on the dev VM). Not offered: tunnel services that terminate TLS (they would see the terminal during harness sign-in). Reachable from outside the home means the GUI always requires a household login | Settled (2026-11-21) |
 
 ## 4. Architecture
@@ -165,6 +166,7 @@ Directory tree, created with `systemd.tmpfiles`:
     worktree/                 the task's own local clone, on branch clank/<task-id>
     events.jsonl, stderr.log  raw harness stream-json events and stderr (all turns)
     status.json               state (done/failed/stopped), mode, exit code, session id, times
+    queued                    while waiting in line: the time it joined (S4)
     image, devcontainer.json  devcontainer tasks: image tag, merged metadata
     prepare.log, lifecycle.log  devcontainer build and lifecycle command output
     result/                   summary.md, diff.patch, diffstat.txt
@@ -178,6 +180,8 @@ Directory tree, created with `systemd.tmpfiles`:
     iso/                      user-supplied Windows ISOs
     overlays/<task-id>.qcow2  per-task copy-on-write overlays
     tools/<name>.qcow2        optional shared toolchain disks (large SDKs), overlaid per task
+  tasks/.queue.lock           held while the queue checks for a free slot and starts a task
+  settings/box.env            box settings set at runtime (max_running=, default 1)
   cache/                      shared build caches (later)
 ```
 
@@ -412,14 +416,20 @@ clankctl stop <task-id>
 clankctl shell --task <task-id> [cmd]   # shell in the task's environment
 clankctl clean [--older-than 7d] [--dry-run]   # also run daily by a timer
 clankctl delete <task-id>               # remove a task, results included
+clankctl queue                          # tasks waiting in line
+clankctl config [set max-running <n>]   # how many tasks run at once (default 1)
 clankctl update [--check]               # rebuild the box from GitHub
 ```
 
 Task containers are started detached (`docker run --detach --rm`), so dockerd
 owns them. They keep going after the SSH session that started them
 disconnects, and `live-restore` keeps them running through dockerd restarts.
-There is no queue or concurrency limit yet; that comes with the service
-layer.
+`run` and `resume` go through the queue (S4): when the box already runs
+`max_running` tasks, the task waits in line (`clankctl queue`) and the
+`clankstation-queue` service starts it when a slot frees up. `stop` on a
+waiting task takes it out of line; a reply to it later starts it with its
+first prompt and the reply. `attach` over SSH doesn't wait in line (it is
+the admin's way in), but a take-over in progress fills a slot.
 
 ### 5.9 Installation
 
@@ -530,12 +540,12 @@ user, with prompts on stdin; clankctl stays the one writer of the data
 tree. API v1 and the event envelope are documented at the top of `api.go`
 and `adapter.go`. Actions only accept same-origin JSON POSTs, so other web
 pages can't drive the box; that is not a login (S5). Browser terminals
-(`terminal.go`) run `clankctl attach --yes`, `clankctl login claude` or
-`clankctl harness enable claude` under a PTY and relay it over a WebSocket.
-A session outlives the page (a phone that sleeps reconnects and gets the
-screen back); **Done, hand back** sends Esc and `/exit` to Claude Code, so
-`clankctl attach` ends normally and refreshes the diff. Sessions nobody has
-looked at for 30 minutes (10 for sign-in and install) are ended the same way.
+(`terminal.go`) run `clankctl login claude` or `clankctl harness enable
+claude` under a PTY and relay it over a WebSocket. A session outlives the
+page (a phone that sleeps reconnects and gets the screen back); one nobody
+has looked at for 10 minutes is ended. Taking over a task was built in S3
+and taken out of the app in S4 (decisions table): nothing interrupts a run
+or skips the line.
 Settings reads Claude's state from `clankctl harness status` and passes on
 only installed, version, signed in, method and plan (not the account's email
 or organization). Off by default; the dev VM enables it on port 8080,
@@ -550,7 +560,7 @@ Each is verified on the dev VM (and a NixOS VM test where it fits).
 | S1 | Read-only service: Go binary serving the embedded Svelte app, NixOS module, systemd unit as `clankstation`. Home, task page, Changes; live events over SSE through the Claude Code adapter. Enabled on the dev VM only until S5 adds login | A task started with `clankctl run` shows up in a browser on the dev VM and updates live while it works. Done: `s1-web` VM test (API, SSE resume, needs-input, changes); on the dev VM a real Claude Code task showed live steps, then its question, summary and diff, and the page reconnected after the service restarted |
 | S2 | Actions: new task, reply, stop, projects (through `clankctl`) | A task can be queued and continued from the browser alone. Done: `s2-actions` VM test (add project, new task, answer, stop and keep going, continue a lost task, cross-site refusal); on the dev VM a real Claude Code task was started from New task, asked its question, and finished after a reply sent from the task page |
 | S3 | Browser terminal: take over (WebSocket + PTY), Claude install and sign-in from Settings | Take over and hand back work from the browser. Done: `s3-terminal` VM test (take over a working task, leave and reconnect, hand back with the diff refreshed, sign-in code not in the service's log, Claude status without the email); on the dev VM, real Claude Code was taken over mid-task from the browser, given an instruction, and handed back with its file in the changes |
-| S4 | Queue and concurrency limit (`queued` state) | With a limit of 1, a second task waits, then starts on its own |
+| S4 | Queue and concurrency limit (`queued` state); take-over out of the app | With a limit of 1, a second task waits, then starts on its own. Done: `s4-queue` VM test (line order, take out of line and start later, replies wait, CLI and web share one line, a limit of 2 runs two) and the full `nix flake check`; on the dev VM two real Claude Code tasks were queued and the second started by itself when the first finished |
 | S5 | Login, Tailscale, HTTPS, installable PWA | Installed on a phone, reachable away from home, login required |
 | S6 | Web push | The phone gets "Done" and "Claude has a question" |
 | S7 | Box settings: updates, storage | "Update now" works from the GUI |

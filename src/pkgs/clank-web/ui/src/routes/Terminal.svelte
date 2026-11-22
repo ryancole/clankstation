@@ -3,15 +3,14 @@
   import { FitAddon } from '@xterm/addon-fit';
   import '@xterm/xterm/css/xterm.css';
 
-  // kind: attach (task = id), login, install
+  // kind: login or install (taking over a task is out of the app for now)
   let { kind, task = '' } = $props();
 
   const TITLES = {
-    attach: "You're in control",
     login: 'Sign in to Claude',
     install: 'Set up Claude',
   };
-  const backHref = kind === 'attach' ? `#/task/${encodeURIComponent(task)}` : '#/settings';
+  const backHref = '#/settings';
 
   let el;
   let status = $state('connecting'); // connecting, open, reconnecting, ending, exited
@@ -95,7 +94,7 @@
             exitCode = c.code ?? 0;
             status = 'exited';
             stopped = true;
-            if (kind === 'attach' || exitCode === 0) {
+            if (exitCode === 0) {
               leaveTimer = setTimeout(() => (location.hash = backHref), 1500);
             }
           }
@@ -132,16 +131,15 @@
       <span class="sub" role="status">
         {#if status === 'connecting'}Connecting…
         {:else if status === 'reconnecting'}Connection lost. Reconnecting…
-        {:else if status === 'ending'}{kind === 'attach' ? 'Handing back…' : 'Closing…'}
+        {:else if status === 'ending'}Closing…
         {:else if status === 'exited'}{exitCode === 0 ? 'Finished.' : 'Ended with a problem. See the messages above.'}
-        {:else if kind === 'attach'}This is Claude Code's own screen. The automatic run is paused.
         {:else if kind === 'login'}Follow Claude's own steps. The box never sees your sign-in.
         {:else}Running Claude's official installer.{/if}
       </span>
     </div>
     {#if status !== 'exited'}
       <button class="end" onclick={end} disabled={status === 'ending' || status === 'connecting'}>
-        {kind === 'attach' ? 'Done, hand back' : 'Close'}
+        Close
       </button>
     {:else}
       <a class="end" href={backHref}>Back</a>

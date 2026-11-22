@@ -1,11 +1,10 @@
-# S3: the browser terminal. Take over a working task and hand it back,
-# reconnect to an open session, sign in through a terminal (the code typed
-# isn't logged), and Claude's status for Settings.
+# S3: the browser terminal for Settings: sign in through a terminal (the code
+# typed isn't logged) and Claude's status. Taking over a task was part of S3
+# and is out of the app since S4 (design section 3).
 #
 # Same stand-ins as m4-task (no network in VM tests): a small Nix-built task
-# image and a stub `claude` with a headless mode, an interactive mode that
-# quits on /exit, `auth login`, `auth status` and `--version`. A real
-# take-over and sign-in are checked in the dev VM.
+# image and a stub `claude` with `auth login`, `auth status` and
+# `--version`. A real sign-in is checked in the dev VM.
 { self, pkgs }:
 let
   testImage = pkgs.dockerTools.buildLayeredImage {
@@ -127,40 +126,7 @@ pkgs.testers.runNixOSTest {
     assert "Login successful" in out, out
     clankstation.fail("journalctl -u clankstation-web | grep -q SECRET-CODE-123")
 
-    # --- Take over a working task -----------------------------------------------
-    task = clankstation.succeed(
-        "curl -sf -X POST -H 'Content-Type: application/json'"
-        f" -d '{{\"project\":\"demo\",\"prompt\":\"work slowly\"}}' {base}/api/tasks"
-        " | sed -E 's/.*\"id\":\"([^\"]+)\".*/\\1/'"
-    ).strip()
-    wait_state(task, "running")
-    clankstation.wait_until_succeeds(f"grep -q init {tasks}/{task}/events.jsonl")
-
-    # Open, type, then leave without handing back: the session stays open.
-    out = term(f"/api/terminal/attach?task={task}",
-               "e:STUB INTERACTIVE stub-session-1 on a terminal",
-               'c:{"type":"resize","cols":120,"rows":40}',
-               "s:hello\\r", "e:you said: hello", "q")
-    wait_state(task, "interactive")
-    assert get(f"/api/tasks/{task}")["terminal"] is True
-    assert get("/api/terminals") == [{"kind": "attach", "task": task}]
-
-    # Come back: the screen so far is replayed. Then hand back.
-    out = term(f"/api/terminal/attach?task={task}",
-               "e:you said: hello", 'c:{"type":"end"}', "e:Goodbye", "x:0")
-
-    # Handed back: the take-over turn is recorded, its changes are in the diff.
-    wait_state(task, "done")
-    st = json.loads(clankstation.succeed(f"cat {tasks}/{task}/status.json"))
-    assert st["mode"] == "interactive" and st["state"] == "done", st
-    d = get(f"/api/tasks/{task}")
-    assert [t["kind"] for t in d["turns"]] == ["run", "attach"], d["turns"]
-    assert "TAKEN-OVER.txt" in [f["path"] for f in d["files"]], d["files"]
-    assert d["terminal"] is False
-    assert get("/api/terminals") == []
-    clankstation.succeed("test -z \"$(docker ps -q)\"")
-
-    # Only kinds the box knows, only for tasks it has.
+    # Only the terminals the app offers: taking over a task is out of it for now.
     clankstation.fail(f"termclient {ws}/api/terminal/shell q")
     clankstation.fail(f"termclient '{ws}/api/terminal/attach?task=t-20990101-000000-ffff' q")
   '';

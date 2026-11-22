@@ -33,6 +33,10 @@
         g[info.group].push(t);
       }
     }
+    // Working first, then the line in order (the oldest waits longest).
+    g.working.sort((a, b) =>
+      (a.state === 'queued') - (b.state === 'queued') ||
+      (a.state === 'queued' ? a.id.localeCompare(b.id) : b.id.localeCompare(a.id)));
     return g;
   });
 

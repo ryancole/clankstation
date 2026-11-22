@@ -159,6 +159,26 @@ func TestStore(t *testing.T) {
 	if _, ok := s.Get("../etc"); ok {
 		t.Error("path traversal accepted")
 	}
+
+	// Waiting in line, in the order clankctl's queued files say.
+	q1 := fakeTask(t, root, "t-20261121-150000-dddd", "")
+	q2 := fakeTask(t, root, "t-20261121-140500-eeee", "")
+	write(t, filepath.Join(q1, "queued"), "2026-11-21T15:00:00.000000001Z\n")
+	write(t, filepath.Join(q2, "queued"), "2026-11-21T15:00:00.000000002Z\n")
+	for id, want := range map[string]string{
+		"t-20261121-150000-dddd": "Next in line",
+		"t-20261121-140500-eeee": "2nd in line",
+	} {
+		d, _ := s.Get(id)
+		if d.State != StateQueued || d.Activity != want {
+			t.Errorf("%s: %s %q, want queued %q", id, d.State, d.Activity, want)
+		}
+	}
+	for n, want := range map[int]string{1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 11: "11th", 12: "12th", 13: "13th", 21: "21st", 22: "22nd", 101: "101st"} {
+		if got := ordinal(n); got != want {
+			t.Errorf("ordinal(%d) = %s, want %s", n, got, want)
+		}
+	}
 }
 
 func TestEventsStream(t *testing.T) {

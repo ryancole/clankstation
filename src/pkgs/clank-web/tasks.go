@@ -22,6 +22,7 @@ var taskIDPattern = regexp.MustCompile(`^t-[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$`)
 // states, plus interactive (running, taken over) and needs_input (done, and
 // the summary asks a question).
 const (
+	StateQueued      = "queued"
 	StatePreparing   = "preparing"
 	StateRunning     = "running"
 	StateInteractive = "interactive"
@@ -143,7 +144,7 @@ func processAlive(pid int) bool {
 }
 
 // boxState mirrors clankctl's task_state: running container, live prepare
-// process, status.json, else lost.
+// process, waiting in line, status.json, else lost.
 func boxState(dir string, running bool) (string, *Status) {
 	st, _ := readStatus(dir)
 	if running {
@@ -153,6 +154,9 @@ func boxState(dir string, running bool) (string, *Status) {
 		if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && processAlive(pid) {
 			return StatePreparing, st
 		}
+	}
+	if fileExists(filepath.Join(dir, "queued")) {
+		return StateQueued, st
 	}
 	if st != nil && st.State != "" {
 		return st.State, st
@@ -182,8 +186,6 @@ type TaskDetail struct {
 	Turns    []Turn  `json:"turns"`
 	Files    []File  `json:"files"`
 	Status   *Status `json:"status,omitempty"`
-	// A take-over terminal is open in the service (S3).
-	Terminal bool `json:"terminal"`
 }
 
 func (s *Store) invalidate() {
@@ -273,6 +275,8 @@ func (s *Store) summary(id, dir string, running bool) TaskDetail {
 		d.Finished = st.Finished
 	}
 	switch state {
+	case StateQueued:
+		d.Activity = s.queuePlace(id)
 	case StateRunning, StatePreparing, StateInteractive:
 		d.Activity = latestStep(filepath.Join(dir, "events.jsonl"))
 	case StateNeedsInput:
@@ -281,6 +285,44 @@ func (s *Store) summary(id, dir string, running bool) TaskDetail {
 		d.Activity = firstSentence(summaryText)
 	}
 	return d
+}
+
+// queuePlace says where a waiting task is in line ("Next in line",
+// "3rd in line"), by the time each task joined (clankctl's queued file).
+func (s *Store) queuePlace(id string) string {
+	type entry struct{ at, id string }
+	var line []entry
+	entries, _ := os.ReadDir(s.tasksDir())
+	for _, e := range entries {
+		if b, err := os.ReadFile(filepath.Join(s.tasksDir(), e.Name(), "queued")); err == nil {
+			line = append(line, entry{strings.TrimSpace(string(b)), e.Name()})
+		}
+	}
+	sort.Slice(line, func(i, j int) bool { return line[i].at < line[j].at })
+	for i, x := range line {
+		if x.id == id {
+			if i == 0 {
+				return "Next in line"
+			}
+			return ordinal(i+1) + " in line"
+		}
+	}
+	return ""
+}
+
+func ordinal(n int) string {
+	suffix := "th"
+	if n%100 < 11 || n%100 > 13 {
+		switch n % 10 {
+		case 1:
+			suffix = "st"
+		case 2:
+			suffix = "nd"
+		case 3:
+			suffix = "rd"
+		}
+	}
+	return strconv.Itoa(n) + suffix
 }
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }

@@ -28,7 +28,8 @@ Projects:
   project list                   List projects
 
 Tasks:
-  run <project> <prompt>         Start a headless task (prompt "-" reads stdin)
+  run <project> <prompt>         Start a headless task (prompt "-" reads stdin); it
+                                 waits in line when the box is busy
   status                         List tasks and their state
   show <task-id>                 Prompt, state, summary and diffstat of a task
   diff <task-id>                 The task's diff against its base commit
@@ -36,7 +37,9 @@ Tasks:
   resume <task-id> <prompt>      Keep going: a new headless turn in the same session
   attach [--yes] <task-id>       Take over in an interactive Claude Code terminal
                                  (a running task's headless run is stopped first)
-  stop <task-id>                 Stop a running task (keeps its results so far)
+  stop <task-id>                 Stop a running task (keeps its results so far),
+                                 or take a waiting one out of the line
+  queue                          Tasks waiting in line, oldest first
   clean [--older-than 7d] [--dry-run]
                                  Remove the worktrees of tasks that finished longer
                                  ago than that (a daily timer does this with 7d),
@@ -69,6 +72,9 @@ Windows base images (QEMU/KVM):
   windows remove <name>          Delete a base image (or a failed build)
 
 System:
+  config                         Show settings
+  config set max-running <n>     How many tasks run at once (default 1); others
+                                 wait in line and start on their own
   update [--check]               Update the box from its flake on GitHub (--check:
                                  only show the installed and latest revisions)
 
@@ -310,6 +316,8 @@ task_state() {
     echo running
   elif [ -f "$t/prepare.pid" ] && kill -0 "$(cat "$t/prepare.pid")" 2>/dev/null; then
     echo preparing
+  elif [ -f "$t/queued" ]; then
+    echo queued
   elif [ -f "$t/status.json" ]; then
     jq -r .state "$t/status.json"
   else
@@ -380,6 +388,147 @@ fail_task() {
   jq -n --arg error "$2" --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{state: "failed", mode: "prepare", exit_code: 1, session_id: "", error: $error, finished: $finished}' \
     >"$t/status.json"
+}
+
+# ---- queue (design: section 3, "Queue and concurrency") -----------------------
+# A task waits in line (a `queued` file in its folder, holding the time it
+# joined) while the box already runs max_running tasks (settings/box.env,
+# default 1). Running and preparing tasks fill a slot. `clankctl queue run`
+# (the clankstation-queue service) starts waiting tasks as slots free up.
+# Every check-and-start holds queue.lock, so two starts can't both take the
+# last slot (tasks/.queue.lock).
+
+settings_file="$CLANK_DATA/settings/box.env"
+
+max_running() {
+  local n=""
+  if [ -f "$settings_file" ]; then n=$(kv "$settings_file" max_running); fi
+  case "$n" in "" | *[!0-9]*) n=1 ;; esac
+  [ "$n" -ge 1 ] || n=1
+  printf '%s' "$n"
+}
+
+slots_used() {
+  local n d pid
+  n=$(docker ps -q --filter label=clankstation.task | wc -l)
+  for d in "$tasks"/t-*/; do
+    [ -f "$d/prepare.pid" ] || continue
+    pid=$(cat "$d/prepare.pid" 2>/dev/null) || continue
+    if kill -0 "$pid" 2>/dev/null; then n=$((n + 1)); fi
+  done
+  printf '%s' "$n"
+}
+
+# Waiting tasks, oldest first.
+queued_tasks() {
+  local f
+  for f in "$tasks"/t-*/queued; do
+    [ -f "$f" ] || continue
+    printf '%s %s\n' "$(cat "$f")" "$(basename "$(dirname "$f")")"
+  done | sort | cut -d' ' -f2
+}
+
+# Run "$@" holding the queue lock. Children started in the background
+# (a devcontainer prepare) must not inherit it: they close fd 9.
+with_queue_lock() {
+  (
+    exec 9>>"$tasks/.queue.lock"
+    flock 9
+    "$@"
+  )
+}
+
+# Start a task's turn now: a devcontainer task builds its image first.
+launch_task() {
+  local id="$1" t="$tasks/$1"
+  if [ "$(kv "$t/task.env" env)" = devcontainer ] && [ ! -s "$t/image" ]; then
+    setsid "$0" _prepare "$id" >>"$t/prepare.log" 2>&1 </dev/null 9>&- &
+    echo "$!" >"$t/prepare.pid"
+  else
+    start_task "$id"
+  fi
+}
+
+# Start the task now if a slot is free and nobody is waiting; else put it in
+# line. Prints "started" or "queued". Call with the queue lock held.
+dispatch() {
+  local id="$1"
+  if [ -z "$(queued_tasks)" ] && [ "$(slots_used)" -lt "$(max_running)" ]; then
+    launch_task "$id"
+    echo started
+  else
+    date -u +%Y-%m-%dT%H:%M:%S.%NZ >"$tasks/$id/queued"
+    echo queued
+  fi
+}
+
+# Start waiting tasks while slots are free. Call with the queue lock held.
+queue_tick() {
+  local id
+  while :; do
+    id=$(queued_tasks | head -n 1)
+    [ -n "$id" ] || return 0
+    [ "$(slots_used)" -lt "$(max_running)" ] || return 0
+    rm -f "$tasks/$id/queued"
+    echo "starting $id"
+    (launch_task "$id") || fail_task "$id" "could not start the task"
+  done
+}
+
+# Take a waiting task out of line. Call with the queue lock held.
+cancel_queued() {
+  local id="$1" t="$tasks/$1"
+  [ -f "$t/queued" ] || return 1
+  rm -f "$t/queued"
+  jq -n --arg sid "$(session_id "$id")" --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{state: "stopped", mode: "headless", exit_code: 0, session_id: $sid, started: "", finished: $finished}' \
+    >"$t/status.json"
+}
+
+cmd_queue() {
+  case "${1:-}" in
+    "" | list)
+      local id n=0
+      echo "At most $(max_running) at a time; $(slots_used) running or preparing."
+      while read -r id; do
+        [ -n "$id" ] || continue
+        n=$((n + 1))
+        printf '%2d. %s  %-16s %s\n' "$n" "$id" "$(kv "$tasks/$id/task.env" project)" \
+          "$(head -n 1 "$tasks/$id/prompt.txt" | cut -c1-60)"
+      done < <(queued_tasks)
+      [ "$n" -gt 0 ] || echo "Nobody is waiting."
+      ;;
+    run)
+      # The clankstation-queue service. Checking every few seconds is cheap
+      # and catches every way a slot frees up (a task ends, is stopped, a
+      # prepare fails, the limit goes up).
+      while :; do
+        if [ -n "$(queued_tasks)" ]; then with_queue_lock queue_tick || true; fi
+        sleep 3
+      done
+      ;;
+    *) die "usage: clankctl queue [list|run]" ;;
+  esac
+}
+
+cmd_config() {
+  case "${1:-}" in
+    "" | get) echo "max-running $(max_running)" ;;
+    set)
+      [ "${2:-}" = max-running ] || die "usage: clankctl config set max-running <n>"
+      local n="${3:-}"
+      case "$n" in "" | *[!0-9]*) die "max-running is a number from 1 to 64" ;; esac
+      [ "$n" -ge 1 ] && [ "$n" -le 64 ] || die "max-running is a number from 1 to 64"
+      {
+        if [ -f "$settings_file" ]; then grep -v '^max_running=' "$settings_file" || true; fi
+        echo "max_running=$n"
+      } >"$settings_file.tmp"
+      mv "$settings_file.tmp" "$settings_file"
+      echo "max-running $n"
+      with_queue_lock queue_tick >/dev/null || true
+      ;;
+    *) die "usage: clankctl config [set max-running <n>]" ;;
+  esac
 }
 
 # ---- devcontainers -------------------------------------------------------------
@@ -489,10 +638,12 @@ require_not_running() {
   case "$(task_state "$1")" in
     running) die "task $1 is still running (see: clankctl logs -f $1, or clankctl attach $1)" ;;
     preparing) die "task $1 is still preparing its environment (see: $tasks/$1/prepare.log)" ;;
+    queued) die "task $1 is waiting in line (clankctl stop $1 takes it out)" ;;
   esac
 }
 
-session_of() {
+# The task's harness session id, or nothing if it never ran.
+session_id() {
   local t="$tasks/$1" sid=""
   if [ -f "$t/status.json" ]; then sid=$(jq -r '.session_id // ""' "$t/status.json"); fi
   # A lost task (the box went down mid-turn) has no status.json; its events
@@ -501,6 +652,12 @@ session_of() {
     sid=$(jq -Rr 'fromjson? | select(.type == "system" and .subtype == "init") | .session_id // empty' \
       "$t/events.jsonl" | tail -n 1)
   fi
+  printf '%s' "$sid"
+}
+
+session_of() {
+  local sid
+  sid=$(session_id "$1")
   [ -n "$sid" ] || die "task $1 has no harness session to continue"
   printf '%s' "$sid"
 }
@@ -548,14 +705,17 @@ cmd_run() {
     # Building a devcontainer image can take minutes, so it runs in the
     # background, detached from this terminal; the task starts when it's done.
     echo "env=devcontainer" >>"$t/task.env"
-    setsid "$0" _prepare "$id" >>"$t/prepare.log" 2>&1 </dev/null &
-    echo "$!" >"$t/prepare.pid"
-    echo "$id"
-    echo "Preparing the devcontainer ($config), then starting. Check on it with: clankctl status" >&2
   else
     echo "env=linux-default" >>"$t/task.env"
-    start_task "$id"
-    echo "$id"
+  fi
+  local how
+  how=$(with_queue_lock dispatch "$id") || exit 1
+  echo "$id"
+  if [ "$how" = queued ]; then
+    echo "Waiting in line (the box runs $(max_running) at a time). Check on it with: clankctl queue" >&2
+  elif [ "$(kv "$t/task.env" env)" = devcontainer ]; then
+    echo "Preparing the devcontainer ($config), then starting. Check on it with: clankctl status" >&2
+  else
     echo "Started. Check on it with: clankctl status   (or: clankctl show $id)" >&2
   fi
 }
@@ -624,21 +784,39 @@ cmd_resume() {
   t=$(task_dir "$id")
   require_not_running "$id"
   require_worktree "$id"
-  sid=$(session_of "$id")
+  sid=$(session_id "$id")
   if [ "$prompt" = - ]; then prompt=$(cat); fi
-  require_image "$(task_image "$id")"
-  printf '%s\n' "$prompt" >"$t/prompt.txt"
+  if [ -n "$sid" ]; then
+    printf '%s\n' "$prompt" >"$t/prompt.txt"
+  else
+    # Taken out of line before it ever ran: start it now, with its first
+    # prompt and this one.
+    printf '%s\n\n%s\n' "$(cat "$t/prompt.txt")" "$prompt" >"$t/prompt.txt.new"
+    mv "$t/prompt.txt.new" "$t/prompt.txt"
+  fi
   printf '%s\n' "$sid" >"$t/resume"
   rm -f "$t/status.json"
   log_turn "$id" resume "$prompt"
-  start_task "$id"
-  echo "Resumed $id (session $sid)." >&2
+  local how
+  how=$(with_queue_lock dispatch "$id") || exit 1
+  if [ "$how" = queued ]; then
+    echo "$id is waiting in line (the box runs $(max_running) at a time)." >&2
+  elif [ -n "$sid" ]; then
+    echo "Resumed $id (session $sid)." >&2
+  else
+    echo "Started $id." >&2
+  fi
 }
 
 cmd_stop() {
   local id="${1:-}"
   [ -n "$id" ] || die "usage: clankctl stop <task-id>"
   task_dir "$id" >/dev/null
+  if [ "$(task_state "$id")" = queued ]; then
+    with_queue_lock cancel_queued "$id" || die "task $id just started; stop it again"
+    echo "$id: stopped (taken out of line)"
+    return
+  fi
   [ "$(task_state "$id")" = running ] || die "task $id is not running"
   echo "Stopping $id (the agent gets up to 30s to finish its current step)..." >&2
   docker stop "clank-$id" >/dev/null
@@ -658,6 +836,7 @@ cmd_attach() {
   [ -n "$id" ] || die "usage: clankctl attach [--yes] <task-id>"
   t=$(task_dir "$id")
   [ "$(task_state "$id")" != preparing ] || die "task $id is still preparing its environment"
+  [ "$(task_state "$id")" != queued ] || die "task $id is waiting in line (clankctl stop $id takes it out)"
   require_worktree "$id"
   if [ "$(task_state "$id")" = running ]; then
     if [ "$yes" != true ]; then
@@ -1098,6 +1277,8 @@ cmd_windows() {
 
 case "${1:-}" in
   windows) shift; cmd_windows "$@" ;;
+  queue) shift; cmd_queue "$@" ;;
+  config) shift; cmd_config "$@" ;;
   _windows-build) shift; cmd_windows_build_run "$@" ;;
   _prepare) shift; cmd_prepare "$@" ;;
   resume) shift; cmd_resume "$@" ;;

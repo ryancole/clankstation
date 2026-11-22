@@ -16,7 +16,6 @@ Technical detail is always one tap away, never in the way.
 | Project | A code repository the box knows about | repo, mirror, remote |
 | Changes | What Claude changed in the project's files | diff, patch, worktree |
 | Reply | Tell Claude what to do next, in the same task | resume, turn |
-| Take over | Work with Claude yourself in a terminal | attach, PTY |
 | Summary | Claude's own account of what it did | result event |
 
 ## 2. Task states as people see them
@@ -26,14 +25,14 @@ The box already knows these per task (`clankctl`'s `task_state` and
 
 | Box state | Label | Sentence on the task page | What you can do |
 |---|---|---|---|
-| `queued` (service layer, new) | Waiting in line | "It starts when another task finishes." | Cancel |
+| `queued` | Waiting in line, and its place ("Next in line") | "It starts by itself when a task ahead of it finishes." | Take it out of line |
 | `preparing` | Getting ready | "Setting up the project's tools. This can take a few minutes the first time." | Stop |
-| `running` | Working | The current activity line (section 4) | Stop, Take over |
-| `running`, mode `interactive` | You're in control | "Someone is working with Claude in a terminal." | Open terminal |
+| `running` | Working | The current activity line (section 4) | Stop |
+| `running`, after `clankctl attach` over SSH | You're in control | "Someone is working with Claude in a terminal." | (none) |
 | `done`, summary ends with a question | Needs your answer | Claude's question, large | Reply |
-| `done` | Finished | "Done. Here's what it did." | Reply, Take over |
-| `failed` | Something went wrong | First line of the error in plain words, if known | Reply ("try again"), Take over |
-| `stopped` | Stopped | "Stopped before it finished. Its work so far is kept." | Reply ("keep going"), Take over |
+| `done` | Finished | "Done. Here's what it did." | Reply |
+| `failed` | Something went wrong | First line of the error in plain words, if known | Reply ("try again") |
+| `stopped` | Stopped | "Stopped before it finished. Its work so far is kept." | Reply ("keep going") |
 | `lost` | Interrupted | "The box restarted while this was working." | Reply ("keep going") |
 | any, with `pruned` | Archived | "Its working files were cleaned up after 7 days. You can still read it." | Read only |
 
@@ -97,7 +96,7 @@ One page per task that changes with its state. From the top:
     items show progress without any guessing.
   - **What Claude is saying:** its latest message text.
   - Buttons: **Stop** (asks first: "Its work so far is kept, and you can tell
-    Claude to keep going later"), **Take over**.
+    Claude to keep going later").
 - **When finished:**
   - **Summary:** `result/summary.md` rendered as formatted text.
   - **What changed:** "3 files changed" with each file name and a small
@@ -106,7 +105,7 @@ One page per task that changes with its state. From the top:
   - **Reply box:** "Tell Claude what to do next" with a **Send** button
     (inside the question box when Claude asked one).
     Sending starts a new turn in the same task (`clankctl resume`).
-  - Buttons: **Take over**. Later: **Send to GitHub** (open a PR).
+  - Later: **Send to GitHub** (open a PR).
 - **History** (below, collapsed after the latest turn): each earlier turn as
   "You asked" (from `prompts.log`) and "Claude did" (that turn's final
   message from `events.jsonl`). A take-over turn shows as "You worked with
@@ -122,23 +121,12 @@ changes: removed lines red, added lines green, unchanged lines folded. New
 files say "New file", deleted files "Deleted". Wide lines wrap. Source:
 `result/diff.patch` (or the live diff while working, as `clankctl diff` does).
 
-### 3.5 Take over (browser terminal)
+### 3.5 Take over (removed for now)
 
-- Before opening, if the task is working: "Claude is working on this right
-  now. Taking over stops that and lets you continue the same conversation
-  yourself." **OK** / **Cancel**. (The same rule as `clankctl attach`:
-  the harness is never driven by two things at once.)
-- Then a full-screen terminal running `claude --resume <session-id>` in the
-  task's environment: Claude Code's own interactive screen, unmodified.
-- On a phone: an extra key row (Esc, Tab, Ctrl, arrows) above the keyboard.
-  Ctrl applies to the next key typed.
-- **Done, hand back** at the top ends the session (Claude Code's own
-  `/exit`). The page returns to the task, whose changes are refreshed.
-- Going back without handing back leaves the session open: the task shows
-  *You're in control* and **Open the terminal**, and the screen comes back as
-  it was. After 30 minutes with no page open, the box hands it back itself.
-- Known gap: a take-over writes no events, so the task's summary stays the
-  one from the last automatic turn. History shows "You took over".
+Built in S3 (a browser terminal running Claude Code's own interactive screen,
+with a hand-back button) and taken out of the app in S4: everything goes
+through the queue, and nothing interrupts a run. To steer a task, **Stop**
+it and reply. Over SSH, `clankctl attach` still works.
 
 ### 3.6 Projects
 
@@ -208,17 +196,19 @@ Home ──New task──> New task ──Start──> Task page (Getting ready 
   │                          push "Done" ──┤
   │                                        v
   └──────── back ──────────────── Task page (Finished / Needs your answer)
-                                    │            │             │
-                                  Reply      Take over     Changes
-                                    │            │
-                         Task page (Working)  Terminal ──Hand back──> Task page
+                                    │                          │
+                                  Reply                      Changes
+                                    │
+                         Task page (Waiting in line → Working)
 ```
 
 - **Queue and walk away:** New task → Start → close the app → push → task page.
 - **Answer a question:** push "Claude has a question" → task page with the
   question on top and the reply box focused → Send → Working.
 - **Keep going after a stop or interruption:** task page → Reply ("keep going").
-- **Take over:** task page → Take over → terminal → Hand back → task page.
+- **Wait your turn:** a task started while another works shows *Waiting in
+  line* with its place, and starts by itself. **Take it out of line** stops
+  it before it runs; a reply later starts it.
 - **First run** (after install, later): open `clankstation.local` → name
   yourself → Set up Claude → Sign in → add a project → first task.
 

@@ -22,5 +22,25 @@
     };
 
     environment.systemPackages = [ config.clankstation.clankctl.package ];
+
+    # Starts tasks waiting in line as slots free up (`clankctl queue run`).
+    # The limit is runtime state (`clankctl config set max-running <n>`).
+    systemd.services.clankstation-queue = {
+      description = "Clankstation task queue";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "docker.service" ];
+      wants = [ "docker.service" ];
+      unitConfig.RequiresMountsFor = [ "/var/lib/clankstation" ];
+      serviceConfig = {
+        ExecStart = "${lib.getExe config.clankstation.clankctl.package} queue run";
+        User = "clankstation";
+        Group = "clankstation";
+        Restart = "always";
+        RestartSec = 5;
+        # A devcontainer task it started keeps preparing in the background:
+        # restarting the queue must not kill it.
+        KillMode = "process";
+      };
+    };
   };
 }

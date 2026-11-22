@@ -172,6 +172,7 @@ in
         "tasks"
         "users"
         "cache"
+        "settings"
         "vm"
         "vm/base"
         "vm/build"

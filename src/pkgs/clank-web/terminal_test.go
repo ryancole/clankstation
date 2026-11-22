@@ -112,23 +112,9 @@ func TestTerminal(t *testing.T) {
 	must(t, c2.Write(ctx, websocket.MessageText, []byte(`{"type":"end"}`)))
 	readUntil(c2, `<control {"type":"exit"`)
 
-	// Take over a task; hand back ends it with /exit.
-	a, _, err := websocket.Dial(ctx, ws+"/api/terminal/attach?task=t-20261121-120000-aaaa", nil)
-	must(t, err)
-	readUntil(a, "taking over t-20261121-120000-aaaa")
-	r, _ := http.Get(srv.URL + "/api/tasks/t-20261121-120000-aaaa")
-	var d TaskDetail
-	must(t, json.NewDecoder(r.Body).Decode(&d))
-	if !d.Terminal {
-		t.Error("task detail doesn't show the open terminal")
-	}
-	must(t, a.Write(ctx, websocket.MessageText, []byte(`{"type":"end"}`)))
-	out := readUntil(a, `<control {"type":"exit","code":0}>`)
-	if !strings.Contains(out, "bye") {
-		t.Errorf("attach ended without /exit: %q", out)
-	}
-	if _, _, err := websocket.Dial(ctx, ws+"/api/terminal/attach?task=t-20990101-000000-ffff", nil); err == nil {
-		t.Error("attach to an unknown task accepted")
+	// Taking over a task is out of the app for now.
+	if _, _, err := websocket.Dial(ctx, ws+"/api/terminal/attach?task=t-20261121-120000-aaaa", nil); err == nil {
+		t.Error("take-over terminal accepted")
 	}
 	if _, _, err := websocket.Dial(ctx, ws+"/api/terminal/shell", nil); err == nil {
 		t.Error("unknown terminal kind accepted")
