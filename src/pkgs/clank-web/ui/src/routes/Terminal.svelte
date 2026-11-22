@@ -38,7 +38,7 @@
 
   // The on-screen key row: Ctrl applies to the next key typed.
   function key(k) {
-    const keys = { Esc: '\x1b', Tab: '\t', Left: '\x1b[D', Up: '\x1b[A', Down: '\x1b[B', Right: '\x1b[C' };
+    const keys = { Esc: '\x1b', Tab: '\t', Left: '\x1b[D', Up: '\x1b[A', Down: '\x1b[B', Right: '\x1b[C', Enter: '\r' };
     if (k === 'Ctrl') ctrl = !ctrl;
     else send(keys[k]);
   }
@@ -210,11 +210,11 @@
   {#if touch}
     <div class="keys" role="toolbar" aria-label="Extra keys">
       <button class="wide" onmousedown={(e) => e.preventDefault()} onclick={paste}>Paste</button>
-      {#each ['Esc', 'Tab', 'Ctrl', 'Left', 'Up', 'Down', 'Right'] as k}
+      {#each ['Esc', 'Tab', 'Ctrl', 'Left', 'Up', 'Down', 'Right', 'Enter'] as k}
         <button class:on={k === 'Ctrl' && ctrl} aria-pressed={k === 'Ctrl' ? ctrl : undefined}
-          aria-label={k.length > 4 || ['Left', 'Up', 'Down'].includes(k) ? `${k} arrow` : k}
+          aria-label={['Left', 'Up', 'Down', 'Right'].includes(k) ? `${k} arrow` : k}
           onmousedown={(e) => e.preventDefault()} onclick={() => key(k)}>
-          {{ Left: '←', Up: '↑', Down: '↓', Right: '→' }[k] ?? k}
+          {{ Left: '←', Up: '↑', Down: '↓', Right: '→', Enter: '↵' }[k] ?? k}
         </button>
       {/each}
     </div>
@@ -243,7 +243,7 @@
   .end:disabled { opacity: 0.6; cursor: default; }
   .term { flex-grow: 1; min-height: 0; padding: 6px 4px 0 8px; }
   .keys {
-    display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 5px;
+    display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px;
     padding: 8px; background: #1a1d23; border-top: 1px solid #262a31;
   }
   .keys button {
