@@ -1,6 +1,6 @@
 # Clankstation design
 
-Status: draft, OS layer. Last updated 2026-11-21.
+Status: draft, OS layer done; service layer starting. Last updated 2026-11-21.
 
 ## 1. What Clankstation is
 
@@ -46,14 +46,16 @@ broad permissions inside their environment.
 | Disk layout | ext4 root for NixOS; all Clankstation state on an XFS data partition or disk at `/var/lib/clankstation`; partitioned with disko (v1.13.0) | Settled, built in M1 |
 | Source location | All source under `src/`; the repo root holds only top-level files | Settled |
 | Default branch | `master` | Settled |
-| Access | LAN only, `clankstation.local` via Avahi/mDNS. Tailscale optional later | Settled (from brief) |
+| Access | `clankstation.local` via Avahi/mDNS on the LAN. Not LAN-only: an owner may set the box up to be reached from anywhere. How (and which name and certificate) is the LAN HTTPS decision below | Changed 2026-11-21 (was LAN only) |
 | Code to Windows VMs | git over the libvirt network, not a file share (section 5.6) | Proposed: confirm at M9 |
 | Installer | Offline ISO with prebuilt systems + disko scripts for both layouts; disks chosen at install via fixed `/dev/clank-{boot,data}` links | Settled (M7) |
 | Windows base images | Unattended install from the user's ISO via an answer-file CD; generic key (unactivated) unless one is given; Secure Boot off + check bypass; TPM 2.0 via swtpm; local `agent` account; host drives VMs over OpenSSH | Settled (M8) |
 | First client | Installable web app (PWA) served by the box. For phone and PC alike, and for non-technical users. Day one: queue, status, result; push on done/needs input; reply/keep going; terminal take-over in the browser | Settled (2026-11-20) |
 | Updates | Manual `clankctl update`: `nixos-rebuild switch --refresh --flake github:ryancole/clankstation/master?dir=src#<host>` (public repo, latest `master`). No update timer; the GUI triggers it later | Settled (M10) |
 | Task retention | A daily timer removes a finished task's worktree (and overlay) 7 days after it finished; results and logs stay until `clankctl delete` | Settled (M10) |
-| Web stack, event protocol, LAN HTTPS | Frontend/backend stack, API + streaming format, and how the box gets a trusted certificate (service workers and web push need HTTPS) | Open |
+| Web stack | Backend in Go (one static binary, `buildGoModule`; creack/pty for the terminal, a web push library, standard `net/http`). Frontend: a Svelte 5 single-page PWA built with Vite (`buildNpmPackage`), embedded in the binary; xterm.js for the browser terminal. Everything from the pinned nixpkgs, no new flake inputs. The service calls `clankctl` for task changes at first and reads the task files directly. Chosen over Rust mainly for build time and RAM: the box builds its own updates | Settled (2026-11-21) |
+| API and event protocol | REST + JSON for actions. Server-Sent Events for live task events, with the event's sequence number as the SSE `id` so a reconnect resumes where it left off. One WebSocket per browser terminal. Raw harness output stays in `events.jsonl` as the record; the harness adapter (section 6) turns it into a small versioned Clankstation stream (`{v:1, seq, time, task, type: state/step/message/plan/result, ...}`), and the GUI depends only on that | Settled (2026-11-21) |
+| HTTPS and remote access | Default: Tailscale (`services.tailscale` from nixpkgs, no new flake input). The app is served at the box's `*.ts.net` name with Tailscale's Let's Encrypt certificate, the same name at home and away (the PWA, service worker and push subscriptions are tied to one origin). The owner signs in to Tailscale through its own flow. Alternative, documented: the owner's own domain with an ACME DNS-01 certificate (`security.acme`), where the owner handles reachability (port forward, split DNS). LAN-only fallback: a box-local CA, name-constrained to the box, installed per device (also used on the dev VM). Not offered: tunnel services that terminate TLS (they would see the terminal during harness sign-in). Reachable from outside the home means the GUI always requires a household login | Settled (2026-11-21) |
 
 ## 4. Architecture
 
@@ -515,9 +517,10 @@ notifications, plain-language result pages with actions (open PR, keep going),
 and the browser terminal. Decisions needed then: web stack, event protocol
 format, how needs-input tasks are shown and answered.
 
+The GUI's screens, flows and plain-language wording are in `docs/gui.md`.
+
 ## 9. Open questions
 
-- Web stack and event protocol (service layer).
 - Code transfer to Windows VMs: confirm git sync at M9.
 - Windows licensing: base images install unactivated with the generic key
   unless `--key` is given. Decide how activation works for task VMs cloned
@@ -530,5 +533,4 @@ format, how needs-input tasks are shown and answered.
 - Upgrade disko when a release newer than v1.13.0 ships. That release should
   have the test-driver fix (then drop the `machine.shutdown()` workaround in
   `src/tests/m1-storage.nix`) and the changes needed for NixOS 26.11.
-- Later: macOS workers, a separate Windows PC as a worker, multiple users,
-  Tailscale.
+- Later: macOS workers, a separate Windows PC as a worker, multiple users.

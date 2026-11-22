@@ -10,7 +10,8 @@ OS milestones M0–M8 and M10 are done (see the milestones table in `docs/design
 Windows tasks (M9) are **shelved** by the user until the box gets more RAM and
 storage; don't work on Windows unless asked. The box updates
 itself with `clankctl update` (from GitHub `master`). Next is the service layer (web GUI, API, task queue, worker event
-protocol), starting with the web stack decision, which is the user's to make.
+protocol). Its stack, API/event protocol and HTTPS/remote access are decided
+(decisions table, 2026-11-21); the screens are in `docs/gui.md`.
 Develop and test it on the WSL dev VM.
 
 ## Repo layout
