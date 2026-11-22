@@ -10,10 +10,10 @@ OS milestones M0–M8 and M10 are done (see the milestones table in `docs/design
 Windows tasks (M9) are **shelved** by the user until the box gets more RAM and
 storage; don't work on Windows unless asked. The box updates
 itself with `clankctl update` (from GitHub `master`) or Settings' **Update now**.
-Service layer milestones S1–S7 are done (section 8.1): the web app with tasks,
-queue, Tailscale login over HTTPS, push notifications and box settings. The
-screens are in `docs/gui.md`. Next: S8, a desktop layout for the web app
-(two and three panes, `docs/gui.md` 3.8).
+Service layer milestones S1–S8 are done (section 8.1): the web app with tasks,
+queue, Tailscale login over HTTPS, push notifications, box settings and a
+desktop layout. The screens are in `docs/gui.md`. What comes next isn't
+decided yet: ask.
 Develop and test on the WSL dev VM; the Hyper-V box is the real install.
 
 ## Repo layout
