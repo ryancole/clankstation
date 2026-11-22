@@ -9,3 +9,6 @@ result-*
 out/
 # EFI variables the dev VM writes into its working directory
 *-efi-vars.fd
+
+# Local Claude Code settings (preview launch configs and the like)
+.claude/
