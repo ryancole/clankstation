@@ -5,6 +5,8 @@
   import NewTask from './routes/NewTask.svelte';
   import Projects from './routes/Projects.svelte';
   import Settings from './routes/Settings.svelte';
+  import Sidebar from './lib/Sidebar.svelte';
+  import { MediaQuery } from 'svelte/reactivity';
   // The terminal (xterm.js) is most of the app's size: load it when opened.
   const loadTerminal = () => import('./routes/Terminal.svelte');
 
@@ -23,6 +25,8 @@
   }
 
   let route = $state(parse(location.hash));
+  // A PC-wide window: the task list stays on the left (docs/gui.md 3.8).
+  const wide = new MediaQuery('min-width: 900px', false);
 
   $effect(() => {
     const onHash = () => {
@@ -34,6 +38,7 @@
   });
 </script>
 
+{#snippet page()}
 {#if route.page === 'task'}
   {#key route.id}<Task id={route.id} />{/key}
 {:else if route.page === 'new'}
@@ -48,6 +53,28 @@
   {/key}
 {:else if route.page === 'changes'}
   {#key route.id}<Changes id={route.id} />{/key}
+{:else if wide.current}
+  <main class="page pick">
+    <p>Pick a task on the left, or start a new one.</p>
+    <a class="btn primary" href="#/new">New task</a>
+  </main>
 {:else}
   <Home />
 {/if}
+{/snippet}
+
+{#if wide.current && route.page !== 'terminal'}
+  <div class="shell">
+    <Sidebar {route} />
+    <div class="main">{@render page()}</div>
+  </div>
+{:else}
+  {@render page()}
+{/if}
+
+<style>
+  .shell { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 100vh; }
+  .main { min-width: 0; }
+  .pick { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; color: var(--muted); font-size: 16px; }
+  .pick p { margin: 0; }
+</style>

@@ -2,6 +2,8 @@
   import { getTask, taskEvents, reply, stopTask } from '../lib/api.js';
   import { stateInfo, isActive, ago, duration } from '../lib/states.js';
   import { renderMarkdown } from '../lib/markdown.js';
+  import ChangesView from '../lib/ChangesView.svelte';
+  import { MediaQuery } from 'svelte/reactivity';
 
   let { id } = $props();
 
@@ -145,6 +147,10 @@
   });
 
   const changed = $derived(task?.files ?? []);
+  // A very wide window shows the changes beside the task (docs/gui.md 3.8).
+  const veryWide = new MediaQuery('min-width: 1400px', false);
+  const showPane = $derived(veryWide.current && changed.length > 0);
+  const changesVersion = $derived(`${task?.finished ?? ''}/${task?.turns?.length ?? 0}/${changed.length}`);
   const maxLines = $derived(Math.max(1, ...changed.map((f) => f.added + f.removed)));
   function bar(n) {
     return n ? Math.max(4, Math.round((n / maxLines) * 48)) : 0;
@@ -155,7 +161,8 @@
   }
 </script>
 
-<main class="page">
+<main class="page" class:with-pane={showPane}>
+ <div class="col">
   <div class="topbar">
     <a class="back" href="#/" aria-label="Back to your tasks">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
@@ -336,9 +343,31 @@
       </dl>
     </details>
   {/if}
+ </div>
+  {#if showPane}
+    <aside class="pane" aria-label="What changed">
+      <div class="pane-head">
+        <h2>What changed</h2>
+        <a href={`#/task/${encodeURIComponent(id)}/changes`}>See all changes</a>
+      </div>
+      <ChangesView {id} variant="pane" version={changesVersion} />
+    </aside>
+  {/if}
 </main>
 
 <style>
+  .with-pane {
+    max-width: none; display: grid; gap: 28px; align-items: start;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  }
+  .with-pane .col { max-width: 720px; width: 100%; justify-self: center; }
+  .pane {
+    position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto;
+    padding-left: 24px; border-left: 1px solid var(--border);
+  }
+  .pane-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 4px 0 12px; }
+  .pane-head h2 { margin: 0; }
+  .pane-head a { font-size: 14px; font-weight: 500; }
   .head { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
   .head h1 { margin: 0; font-size: 22px; line-height: 1.25; overflow-wrap: anywhere; }
   .meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

@@ -164,6 +164,34 @@ add`; a failed clone shows git's message under "Details".
   (no restart button). Free space: "Tasks and projects" (the data disk) and
   "System". Projects is linked below.
 
+### 3.8 On a PC (S8)
+
+Most people give Claude its tasks from a PC, so a wide window gets more than
+a stretched phone page. Phones (under 900px wide) keep the screens above as
+they are.
+
+- **From 900px: two panes.** The task list sits on the left all the time: the
+  **New task** button on top, then the three groups from Home (3.1) as
+  compact rows (title, project, state label, the activity or summary line),
+  then **Projects** and **Settings** at the bottom. The open task is
+  highlighted. Everything else (task page, New task, Projects, Settings,
+  Changes) opens on the right. With nothing open, the right side says "Pick a
+  task on the left, or start a new one" with a **New task** button. The list
+  keeps refreshing (every few seconds, as Home does) whatever is open on the
+  right, so a task finishing elsewhere shows up without a reload.
+- **From 1400px: three panes on a task page.** The task's changes sit to the
+  right of the conversation once a turn has left any: the file list, then
+  the selected file's changes, with line numbers. They are the changes as of
+  Claude's last finished turn (`result/diff.patch`), and refresh when the
+  next turn ends. "See all changes" opens the full Changes page instead.
+- **Changes on a wide screen.** The files are a list beside the changes, not
+  a picker, and lines have numbers. Long lines don't wrap; the changes
+  scroll sideways. A
+  **Side by side** / **One column** switch shows old and new next to each
+  other; the choice is remembered on that device.
+- Pages keep the same addresses as on a phone (`#/task/<id>` and so on), so
+  a link or notification opens the same place on either.
+
 ## 4. Turning events into plain language
 
 `events.jsonl` is Claude Code's `stream-json` output. The "Now" line and the

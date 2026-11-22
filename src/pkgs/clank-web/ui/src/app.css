@@ -156,3 +156,9 @@ input:focus-visible, textarea:focus-visible, .btn:focus-visible, a:focus-visible
   background: linear-gradient(transparent, var(--bg) 30%);
 }
 .bottom-bar .btn { width: 100%; }
+
+/* On a PC (docs/gui.md 3.8) the task list is always on the left, so a
+   page's own "back to your tasks" arrow goes. */
+.shell .back[href="#/"] { display: none; }
+.shell .topbar:has(> .back[href="#/"]:only-child) { display: none; }
+.shell .page { padding-top: 24px; }

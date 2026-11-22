@@ -1,50 +1,16 @@
 <script>
   import { listTasks } from '../lib/api.js';
-  import { stateInfo, ago } from '../lib/states.js';
+  import { stateInfo } from '../lib/states.js';
+  import { groupTasks, when, pollTasks } from '../lib/taskList.js';
 
   let tasks = $state(null);
   let error = $state('');
   let showOlder = $state(false);
 
-  async function refresh() {
-    try {
-      tasks = await listTasks();
-      error = '';
-    } catch {
-      error = "Can't reach the box right now. Retrying…";
-    }
-  }
+  $effect(() => pollTasks(listTasks, (t) => { tasks = t; error = ''; },
+    () => (error = "Can't reach the box right now. Retrying…")));
 
-  $effect(() => {
-    refresh();
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  });
-
-  const WEEK = 7 * 86400 * 1000;
-  const groups = $derived.by(() => {
-    const g = { needs: [], working: [], done: [], older: [] };
-    for (const t of tasks ?? []) {
-      const info = stateInfo(t);
-      if (info.group === 'done') {
-        const when = Date.parse(t.finished || t.created);
-        (Date.now() - when > WEEK ? g.older : g.done).push(t);
-      } else {
-        g[info.group].push(t);
-      }
-    }
-    // Working first, then the line in order (the oldest waits longest).
-    g.working.sort((a, b) =>
-      (a.state === 'queued') - (b.state === 'queued') ||
-      (a.state === 'queued' ? a.id.localeCompare(b.id) : b.id.localeCompare(a.id)));
-    return g;
-  });
-
-  function when(t) {
-    const info = stateInfo(t);
-    if (info.group === 'working') return `started ${ago(t.created)}`;
-    return ago(t.finished || t.created);
-  }
+  const groups = $derived(groupTasks(tasks));
 </script>
 
 <main class="page">
