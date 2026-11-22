@@ -103,6 +103,7 @@
         m8-windows-plumbing = import ./tests/m8-windows-plumbing.nix { inherit self pkgs; };
         m10-cleanup-update = import ./tests/m10-cleanup-update.nix { inherit self pkgs; };
         s1-web = import ./tests/s1-web.nix { inherit self pkgs; };
+        s2-actions = import ./tests/s2-actions.nix { inherit self pkgs; };
       }
       // import ./tests/m1-storage.nix { inherit self pkgs disko; };
 

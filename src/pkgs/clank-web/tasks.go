@@ -35,6 +35,8 @@ const (
 type Store struct {
 	Data    string // /var/lib/clankstation
 	Running func() (map[string]bool, error)
+	// Invalidate drops cached container state (optional).
+	Invalidate func()
 }
 
 func (s *Store) tasksDir() string { return filepath.Join(s.Data, "tasks") }
@@ -180,6 +182,12 @@ type TaskDetail struct {
 	Turns    []Turn  `json:"turns"`
 	Files    []File  `json:"files"`
 	Status   *Status `json:"status,omitempty"`
+}
+
+func (s *Store) invalidate() {
+	if s.Invalidate != nil {
+		s.Invalidate()
+	}
 }
 
 func (s *Store) running() map[string]bool {

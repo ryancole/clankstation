@@ -370,7 +370,8 @@ How this works for Claude Code:
   a new headless turn with `--resume <session-id>` on the same worktree. Events
   are appended, the summary is that turn's result, and the diff stays
   cumulative against the original base. Every turn's prompt goes to
-  `prompts.log`.
+  `prompts.log`. A lost task (the box went down mid-turn, so no
+  `status.json`) continues from the session named in its events.
 - **Watch:** `clankctl logs [-f]` renders the event stream (assistant text,
   tool calls, results). `clankctl shell --task` opens a shell in the running
   container, or in a fresh one on the worktree.
@@ -521,10 +522,14 @@ The GUI's screens, flows and plain-language wording are in `docs/gui.md`.
 `clank-web` (`src/pkgs/clank-web`, module `src/modules/web.nix`): Go,
 standard library only, with the Svelte app (`ui/`) built by
 `buildNpmPackage` and embedded. It runs as `clankstation`, reads the task
-files and asks the Docker socket which task containers are running. API v1
-and the event envelope are documented at the top of `api.go` and
-`adapter.go`. Off by default; the dev VM enables it on port 8080, forwarded
-to `http://localhost:8080` in WSL (and Windows).
+files and asks the Docker socket which task containers are running. Every
+change (new task, reply, stop, add project) runs `clankctl` as the same
+user, with prompts on stdin; clankctl stays the one writer of the data
+tree. API v1 and the event envelope are documented at the top of `api.go`
+and `adapter.go`. Actions only accept same-origin JSON POSTs, so other web
+pages can't drive the box; that is not a login (S5). Off by default; the
+dev VM enables it on port 8080, forwarded to `http://localhost:8080` in WSL
+(and Windows).
 
 ### 8.1 Milestones (service layer)
 
@@ -533,7 +538,7 @@ Each is verified on the dev VM (and a NixOS VM test where it fits).
 | # | Milestone | Done when |
 |---|---|---|
 | S1 | Read-only service: Go binary serving the embedded Svelte app, NixOS module, systemd unit as `clankstation`. Home, task page, Changes; live events over SSE through the Claude Code adapter. Enabled on the dev VM only until S5 adds login | A task started with `clankctl run` shows up in a browser on the dev VM and updates live while it works. Done: `s1-web` VM test (API, SSE resume, needs-input, changes); on the dev VM a real Claude Code task showed live steps, then its question, summary and diff, and the page reconnected after the service restarted |
-| S2 | Actions: new task, reply, stop, projects (through `clankctl`) | A task can be queued and continued from the browser alone |
+| S2 | Actions: new task, reply, stop, projects (through `clankctl`) | A task can be queued and continued from the browser alone. Done: `s2-actions` VM test (add project, new task, answer, stop and keep going, continue a lost task, cross-site refusal); on the dev VM a real Claude Code task was started from New task, asked its question, and finished after a reply sent from the task page |
 | S3 | Browser terminal: take over (WebSocket + PTY), Claude install and sign-in from Settings | Take over and hand back work from the browser |
 | S4 | Queue and concurrency limit (`queued` state) | With a limit of 1, a second task waits, then starts on its own |
 | S5 | Login, Tailscale, HTTPS, installable PWA | Installed on a phone, reachable away from home, login required |

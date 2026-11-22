@@ -1,5 +1,5 @@
 <script>
-  import { getTask, taskEvents } from '../lib/api.js';
+  import { getTask, taskEvents, reply, stopTask } from '../lib/api.js';
   import { stateInfo, isActive, ago, duration } from '../lib/states.js';
   import { renderMarkdown } from '../lib/markdown.js';
 
@@ -17,6 +17,51 @@
     if (t === null) missing = true;
     else task = t;
   }
+
+  let replyText = $state('');
+  let busy = $state(''); // '', 'reply', 'stop'
+  let actionError = $state('');
+
+  async function sendReply(e) {
+    e.preventDefault();
+    if (busy || !replyText.trim()) return;
+    busy = 'reply';
+    actionError = '';
+    try {
+      await reply(id, replyText);
+      replyText = '';
+      liveState = 'running';
+      await load();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err) {
+      actionError = err.message;
+    } finally {
+      busy = '';
+    }
+  }
+
+  async function stop() {
+    if (busy) return;
+    if (!confirm('Stop this task? Its work so far is kept, and you can tell Claude to keep going later.')) return;
+    busy = 'stop';
+    actionError = '';
+    try {
+      await stopTask(id);
+      await load();
+    } catch (err) {
+      actionError = err.message;
+    } finally {
+      busy = '';
+    }
+  }
+
+  const replyHint = $derived(
+    {
+      failed: 'Try again, or say what to do differently',
+      stopped: 'For example: keep going',
+      lost: 'For example: keep going',
+    }[liveState || task?.state] ?? 'Tell Claude what to do next',
+  );
 
   function onEvent(e) {
     if (e.type === 'state') {
@@ -157,12 +202,19 @@
           <div class="prose">{@html renderMarkdown(lastMessage)}</div>
         </section>
       {/if}
+
+      {#if cur === 'running'}
+        {#if actionError}<p class="error-box" role="alert">{actionError}</p>{/if}
+        <div class="actions">
+          <button class="btn" onclick={stop} disabled={!!busy}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</button>
+        </div>
+      {/if}
     {:else}
       {#if task.question && cur === 'needs_input'}
         <div class="card question">
           <div class="label q">Claude asks</div>
           <div class="prose q-text">{@html renderMarkdown(task.question)}</div>
-          <p class="muted small">Replying from here comes in the next version.</p>
+          {#if !task.archived}{@render replyForm('Your answer')}{/if}
         </div>
       {/if}
 
@@ -199,7 +251,24 @@
           </a>
         {/if}
       </section>
+
+      {#if cur !== 'needs_input' && !task.archived}
+        <section class="card reply-card">
+          {@render replyForm('Tell Claude what to do next')}
+        </section>
+      {/if}
     {/if}
+
+    {#snippet replyForm(label)}
+      <form class="reply" onsubmit={sendReply}>
+        <label for="reply">{label}</label>
+        <textarea id="reply" rows="3" bind:value={replyText} placeholder={replyHint}></textarea>
+        {#if actionError}<p class="error-box" role="alert">{actionError}</p>{/if}
+        <button class="btn primary small" type="submit" disabled={!!busy || !replyText.trim()}>
+          {busy === 'reply' ? 'Sending…' : 'Send'}
+        </button>
+      </form>
+    {/snippet}
 
     {#if history.length > 1 || (!active && history.length)}
       <section>
@@ -270,6 +339,13 @@
   .q { color: var(--needs-fg); }
   .q-text { font-size: 18px; font-weight: 500; color: var(--text); }
   .question p { margin: 0; }
+
+  .actions { display: flex; gap: 10px; margin: 22px 0; }
+  .actions .btn { flex: 1 1 0; }
+  .reply-card { padding: 16px; }
+  .reply { display: flex; flex-direction: column; gap: 10px; }
+  .reply label { font-size: 15px; font-weight: 600; }
+  .reply .btn { align-self: flex-end; }
 
   .files { display: flex; flex-direction: column; text-decoration: none; color: inherit; }
   .files-head { display: flex; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); font-weight: 600; }

@@ -7,22 +7,100 @@ package main
 //   GET /api/tasks/{id}/events   Server-Sent Events: the task's events from
 //                                the start (or after Last-Event-ID / ?after=N),
 //                                then live ones, plus "state" events
+//   GET /api/projects            projects, the most recently used first
+//
+// Actions (S2), JSON bodies, all through clankctl. Errors are
+// {"error": "<message for the user>"} with status 400:
+//   POST /api/tasks              {project, prompt} -> {id}
+//   POST /api/tasks/{id}/reply   {prompt}
+//   POST /api/tasks/{id}/stop
+//   POST /api/projects           {name, url}
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
-func newServer(s *Store, ui fs.FS) http.Handler {
+func newServer(s *Store, c *Clankctl, ui fs.FS) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) {
+		ps := s.Projects()
+		for i := range ps {
+			ps[i].URL = redactURL(ps[i].URL)
+		}
+		writeJSON(w, ps)
+	})
+	mux.HandleFunc("POST /api/projects", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Name, URL string }
+		if !readJSON(w, r, &in) {
+			return
+		}
+		err := c.AddProject(r.Context(), in.Name, in.URL)
+		s.invalidate()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("POST /api/tasks", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Project, Prompt string }
+		if !readJSON(w, r, &in) {
+			return
+		}
+		id, err := c.NewTask(r.Context(), in.Project, in.Prompt)
+		s.invalidate()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]string{"id": id})
+	})
+	mux.HandleFunc("POST /api/tasks/{id}/reply", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Prompt string }
+		if _, ok := s.taskDir(r.PathValue("id")); !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		err := c.Reply(r.Context(), r.PathValue("id"), in.Prompt)
+		s.invalidate()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/tasks/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := s.taskDir(r.PathValue("id")); !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if !sameOrigin(w, r) {
+			return
+		}
+		err := c.Stop(r.Context(), r.PathValue("id"))
+		s.invalidate()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /api/tasks", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.List())
 	})
@@ -55,6 +133,58 @@ func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+// sameOrigin refuses requests a page on another site could make: a browser
+// sends Origin with every POST, and it must name this host. (Not a login:
+// that comes with S5. It stops other web pages from driving the box.)
+func sameOrigin(w http.ResponseWriter, r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	if o == "" {
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			http.Error(w, "cross-site request", http.StatusForbidden)
+			return false
+		}
+		return true // not a browser (curl, tests)
+	}
+	u, err := url.Parse(o)
+	if err != nil || u.Host != r.Host {
+		http.Error(w, "cross-site request", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+// readJSON reads a small JSON body from a same-origin request.
+func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	if !sameOrigin(w, r) {
+		return false
+	}
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		http.Error(w, "expected application/json", http.StatusUnsupportedMediaType)
+		return false
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(v); err != nil {
+		http.Error(w, "bad JSON", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+func writeError(w http.ResponseWriter, err error) {
+	var ae *ActionError
+	msg := "Something went wrong on the box."
+	if errors.As(err, &ae) {
+		msg = ae.Msg
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+var urlUserinfo = regexp.MustCompile(`://[^/@]*@`)
+
+// redactURL hides credentials someone put in a clone URL.
+func redactURL(s string) string { return urlUserinfo.ReplaceAllString(s, "://") }
 
 func securityHeaders(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

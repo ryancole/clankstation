@@ -65,6 +65,7 @@ Each card shows:
 
 A large **New task** button sits at the bottom (thumb reach on a phone; top
 right on a PC). Empty state: "Nothing yet. Give Claude its first task."
+Until Settings exists (S3), a **Projects** link sits in the top bar.
 
 Data: `tasks/*/task.env`, `prompts.log`, the task state, `result/summary.md`,
 and the tail of `events.jsonl` for the activity line.
@@ -81,7 +82,8 @@ and the tail of `events.jsonl` for the activity line.
 
 No other fields on day one. Branch, template and base commit stay as
 `clankctl` defaults. If Claude isn't set up or signed in, this screen says so
-and links to Settings instead of letting a task fail.
+and links to Settings instead of letting a task fail (with Settings, S3;
+until then Start shows clankctl's own message).
 
 ### 3.3 Task page
 
@@ -95,13 +97,15 @@ One page per task that changes with its state. From the top:
   - **Plan:** Claude's to-do list as a checklist, when it keeps one. Ticked
     items show progress without any guessing.
   - **What Claude is saying:** its latest message text.
-  - Buttons: **Stop**, **Take over**.
+  - Buttons: **Stop** (asks first: "Its work so far is kept, and you can tell
+    Claude to keep going later"), **Take over** (S3).
 - **When finished:**
   - **Summary:** `result/summary.md` rendered as formatted text.
   - **What changed:** "3 files changed" with each file name and a small
     added/removed bar (`result/diffstat.txt`). Tap a file to see its changes
     (3.4). "No files were changed" when the diff is empty.
-  - **Reply box:** "Tell Claude what to do next" with a **Send** button.
+  - **Reply box:** "Tell Claude what to do next" with a **Send** button
+    (inside the question box when Claude asked one).
     Sending starts a new turn in the same task (`clankctl resume`).
   - Buttons: **Take over**. Later: **Send to GitHub** (open a PR).
 - **History** (below, collapsed after the latest turn): each earlier turn as

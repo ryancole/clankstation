@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -166,7 +168,7 @@ func TestEventsStream(t *testing.T) {
 		return map[string]bool{"t-20261121-120000-aaaa": true}, nil
 	}}
 	ui := fstest.MapFS{"index.html": {Data: []byte("<!doctype html>app")}}
-	srv := httptest.NewServer(newServer(s, ui))
+	srv := httptest.NewServer(newServer(s, &Clankctl{Path: "false", User: "default"}, ui))
 	defer srv.Close()
 
 	req, _ := http.NewRequest("GET", srv.URL+"/api/tasks/t-20261121-120000-aaaa/events", nil)
@@ -223,5 +225,111 @@ func TestEventsStream(t *testing.T) {
 	r3, _ := http.Get(srv.URL + "/api/nope")
 	if r3.StatusCode != 404 {
 		t.Errorf("unknown api status %d", r3.StatusCode)
+	}
+}
+
+// A fake clankctl that logs its arguments, CLANK_USER and stdin.
+func fakeClankctl(t *testing.T) (*Clankctl, string) {
+	t.Helper()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "log")
+	script := filepath.Join(dir, "clankctl")
+	write(t, script, `#!/bin/sh
+{ echo "user=$CLANK_USER args=$*"; [ "$2" = - ] || [ "$3" = - ] && cat; echo; } >> `+log+`
+case "$1 $2" in
+  "run demo") echo t-20261122-010203-abcd ;;
+  "run nope") echo "clankctl: no such project: nope (see: clankctl project list)" >&2; exit 1 ;;
+esac
+`)
+	must(t, os.Chmod(script, 0o755))
+	return &Clankctl{Path: script, User: "default"}, log
+}
+
+func TestActions(t *testing.T) {
+	root := t.TempDir()
+	fakeTask(t, root, "t-20261121-120000-aaaa", "done")
+	must(t, os.MkdirAll(filepath.Join(root, "projects", "bakery"), 0o755))
+	write(t, filepath.Join(root, "projects", "bakery", "project.env"), "url=https://bob:secret@example.com/b.git\ntemplate=auto\n")
+	must(t, os.MkdirAll(filepath.Join(root, "projects", "alpha"), 0o755))
+	write(t, filepath.Join(root, "projects", "alpha", "project.env"), "url=https://example.com/a.git\ntemplate=auto\n")
+	c, log := fakeClankctl(t)
+	s := &Store{Data: root}
+	srv := httptest.NewServer(newServer(s, c, fstest.MapFS{"index.html": {Data: []byte("x")}}))
+	defer srv.Close()
+
+	post := func(path, body string, hdr ...string) (*http.Response, string) {
+		t.Helper()
+		req, _ := http.NewRequest("POST", srv.URL+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		for i := 0; i+1 < len(hdr); i += 2 {
+			req.Header.Set(hdr[i], hdr[i+1])
+		}
+		resp, err := http.DefaultClient.Do(req)
+		must(t, err)
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp, string(b)
+	}
+
+	// Projects: bakery has a task, so it comes first; credentials are hidden.
+	resp, _ := http.Get(srv.URL + "/api/projects")
+	var ps []Project
+	must(t, json.NewDecoder(resp.Body).Decode(&ps))
+	if len(ps) != 2 || ps[0].Name != "bakery" || ps[0].URL != "https://example.com/b.git" || ps[1].Name != "alpha" {
+		t.Errorf("projects = %+v", ps)
+	}
+
+	r, body := post("/api/tasks", `{"project":"demo","prompt":"-rf\n'quoted' $HOME"}`, "Origin", srv.URL)
+	if r.StatusCode != 201 || !strings.Contains(body, `"id":"t-20261122-010203-abcd"`) {
+		t.Errorf("new task: %d %s", r.StatusCode, body)
+	}
+	r, body = post("/api/tasks", `{"project":"nope","prompt":"x"}`)
+	if r.StatusCode != 400 || !strings.Contains(body, "no such project: nope") {
+		t.Errorf("bad project: %d %s", r.StatusCode, body)
+	}
+	if r, _ = post("/api/tasks", `{"project":"demo","prompt":"  "}`); r.StatusCode != 400 {
+		t.Errorf("empty prompt: %d", r.StatusCode)
+	}
+	if r, _ = post("/api/tasks/t-20261121-120000-aaaa/reply", `{"prompt":"go on"}`); r.StatusCode != 204 {
+		t.Errorf("reply: %d", r.StatusCode)
+	}
+	if r, _ = post("/api/tasks/t-20261121-120000-aaaa/stop", ``); r.StatusCode != 204 {
+		t.Errorf("stop: %d", r.StatusCode)
+	}
+	if r, _ = post("/api/tasks/t-20990101-000000-ffff/reply", `{"prompt":"x"}`); r.StatusCode != 404 {
+		t.Errorf("reply to unknown task: %d", r.StatusCode)
+	}
+	if r, _ = post("/api/projects", `{"name":"New","url":"x"}`); r.StatusCode != 400 {
+		t.Errorf("bad project name: %d", r.StatusCode)
+	}
+	if r, _ = post("/api/projects", `{"name":"new","url":"--upload-pack=x"}`); r.StatusCode != 400 {
+		t.Errorf("option as url: %d", r.StatusCode)
+	}
+	if r, _ = post("/api/projects", `{"name":"new","url":"https://example.com/n.git"}`); r.StatusCode != 201 {
+		t.Errorf("add project: %d", r.StatusCode)
+	}
+
+	// Other sites can't drive the box.
+	if r, _ = post("/api/tasks", `{"project":"demo","prompt":"x"}`, "Origin", "http://evil.example"); r.StatusCode != 403 {
+		t.Errorf("cross-origin: %d", r.StatusCode)
+	}
+	if r, _ = post("/api/tasks/t-20261121-120000-aaaa/stop", ``, "Sec-Fetch-Site", "cross-site"); r.StatusCode != 403 {
+		t.Errorf("cross-site stop: %d", r.StatusCode)
+	}
+
+	b, _ := os.ReadFile(log)
+	got := string(b)
+	for _, want := range []string{
+		"user=default args=run demo -\n-rf\n'quoted' $HOME\n",
+		"args=resume t-20261121-120000-aaaa -\ngo on\n",
+		"args=stop t-20261121-120000-aaaa\n",
+		"args=project add new https://example.com/n.git\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("clankctl log lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "evil") || strings.Contains(got, "upload-pack") || strings.Contains(got, "New") {
+		t.Errorf("refused requests reached clankctl:\n%s", got)
 	}
 }

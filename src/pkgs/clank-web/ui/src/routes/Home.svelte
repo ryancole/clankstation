@@ -44,7 +44,10 @@
 </script>
 
 <main class="page">
-  <div class="topbar"><h1 class="title">Your tasks</h1></div>
+  <div class="topbar">
+    <h1 class="title">Your tasks</h1>
+    <a class="projects-link" href="#/projects">Projects</a>
+  </div>
 
   {#if error}<p class="notice">{error}</p>{/if}
 
@@ -66,7 +69,7 @@
   {#if tasks === null && !error}
     <p class="empty">Loading…</p>
   {:else if tasks && tasks.length === 0}
-    <p class="empty">Nothing yet. Give Claude its first task.</p>
+    <p class="empty">Nothing yet. Give Claude its first task with <strong>New task</strong>.</p>
   {:else if tasks}
     {#if groups.needs.length}
       <h2 class="section-title">Needs you</h2>
@@ -88,10 +91,23 @@
       </div>
     {/if}
   {/if}
+
+  <div class="bottom-bar">
+    <a class="btn primary" href="#/new">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+      New task
+    </a>
+  </div>
 </main>
 
 <style>
-  .title { font-size: 28px; }
+  .title { font-size: 28px; flex-grow: 1; }
+  .projects-link {
+    min-height: 44px; display: inline-flex; align-items: center; padding: 0 8px;
+    font-size: 15px; font-weight: 500; text-decoration: none;
+  }
+  main { min-height: 100vh; display: flex; flex-direction: column; }
+  .bottom-bar { margin-top: auto; }
   .list { display: flex; flex-direction: column; gap: 10px; }
   .task {
     display: flex; flex-direction: column; gap: 6px; padding: 14px 16px;

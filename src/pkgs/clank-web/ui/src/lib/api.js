@@ -48,3 +48,33 @@ export function taskEvents(id, onEvent) {
     es?.close();
   };
 }
+
+// Actions. A failure throws an Error whose message is the box's own
+// plain-language explanation.
+async function postJSON(path, body) {
+  let r;
+  try {
+    r = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    });
+  } catch {
+    throw new Error("Can't reach the box right now. Check your connection and try again.");
+  }
+  const text = await r.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    /* not JSON */
+  }
+  if (!r.ok) throw new Error(data?.error ?? 'Something went wrong on the box.');
+  return data;
+}
+
+export const listProjects = () => getJSON('/api/projects');
+export const addProject = (name, url) => postJSON('/api/projects', { name, url });
+export const newTask = (project, prompt) => postJSON('/api/tasks', { project, prompt });
+export const reply = (id, prompt) => postJSON(`/api/tasks/${encodeURIComponent(id)}/reply`, { prompt });
+export const stopTask = (id) => postJSON(`/api/tasks/${encodeURIComponent(id)}/stop`);

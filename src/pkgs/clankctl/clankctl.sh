@@ -495,6 +495,12 @@ require_not_running() {
 session_of() {
   local t="$tasks/$1" sid=""
   if [ -f "$t/status.json" ]; then sid=$(jq -r '.session_id // ""' "$t/status.json"); fi
+  # A lost task (the box went down mid-turn) has no status.json; its events
+  # still name the session.
+  if [ -z "$sid" ] && [ -f "$t/events.jsonl" ]; then
+    sid=$(jq -Rr 'fromjson? | select(.type == "system" and .subtype == "init") | .session_id // empty' \
+      "$t/events.jsonl" | tail -n 1)
+  fi
   [ -n "$sid" ] || die "task $1 has no harness session to continue"
   printf '%s' "$sid"
 }

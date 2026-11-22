@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -24,9 +25,12 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "address to listen on")
 	data := flag.String("data", "/var/lib/clankstation", "Clankstation data root")
 	dockerSock := flag.String("docker", "/run/docker.sock", "Docker socket (to see which tasks run)")
+	clankctl := flag.String("clankctl", "clankctl", "clankctl executable (for actions)")
+	user := flag.String("user", "default", "household user for new tasks (CLANK_USER)")
 	flag.Parse()
 
-	store := &Store{Data: *data, Running: dockerRunning(*dockerSock)}
+	running, invalidate := dockerRunning(*dockerSock)
+	store := &Store{Data: *data, Running: running, Invalidate: invalidate}
 	ui, err := fs.Sub(uiFiles, "ui/dist")
 	if err != nil {
 		log.Fatal(err)
@@ -34,7 +38,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *listen,
-		Handler:           newServer(store, ui),
+		Handler:           newServer(store, &Clankctl{Path: *clankctl, User: *user}, ui),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Printf("clank-web listening on %s (data %s)", *listen, *data)
@@ -45,8 +49,9 @@ func main() {
 }
 
 // dockerRunning asks the Docker API which task containers are running
-// (clankctl labels them clankstation.task=<id>). Cached for a second.
-func dockerRunning(sock string) func() (map[string]bool, error) {
+// (clankctl labels them clankstation.task=<id>). Cached for a second; the
+// second function drops the cache (after an action changed something).
+func dockerRunning(sock string) (func() (map[string]bool, error), func()) {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
@@ -56,10 +61,13 @@ func dockerRunning(sock string) func() (map[string]bool, error) {
 			},
 		},
 	}
+	var mu sync.Mutex
 	var cached map[string]bool
 	var at time.Time
 	q := url.Values{"filters": {`{"label":["clankstation.task"],"status":["running"]}`}}
-	return func() (map[string]bool, error) {
+	get := func() (map[string]bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
 		if cached != nil && time.Since(at) < time.Second {
 			return cached, nil
 		}
@@ -83,4 +91,10 @@ func dockerRunning(sock string) func() (map[string]bool, error) {
 		cached, at = m, time.Now()
 		return m, nil
 	}
+	invalidate := func() {
+		mu.Lock()
+		cached = nil
+		mu.Unlock()
+	}
+	return get, invalidate
 }

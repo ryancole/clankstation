@@ -1,4 +1,5 @@
-# The service layer's web service, clank-web (design section 8, S1: read-only).
+# The service layer's web service, clank-web (design section 8): the app,
+# its API (S1) and actions through clankctl (S2).
 # Off by default: until login lands (S5) it is enabled on the dev VM only.
 {
   config,
@@ -53,14 +54,20 @@ in
           "/var/lib/clankstation"
           "-docker"
           "/run/docker.sock"
+          "-clankctl"
+          (lib.getExe config.clankstation.clankctl.package)
         ];
-        # The service user owns the task files; docker group membership
-        # (service-user.nix) lets it ask Docker which tasks are running.
+        # The service user owns the task files and runs clankctl for every
+        # change (as itself, so clankctl needs no sudo); docker group
+        # membership (service-user.nix) lets it see and start task containers.
         User = "clankstation";
         Group = "clankstation";
         Restart = "on-failure";
-        # S1 only reads.
+        # A devcontainer task keeps preparing in a background clankctl after
+        # the request returns: restarting the service must not kill it.
+        KillMode = "process";
         ProtectSystem = "strict";
+        ReadWritePaths = [ "/var/lib/clankstation" ];
         ProtectHome = true;
         PrivateTmp = true;
         PrivateDevices = true;
@@ -72,9 +79,11 @@ in
           "AF_UNIX"
           "AF_INET"
           "AF_INET6"
+          "AF_NETLINK"
         ];
         LockPersonality = true;
-        MemoryDenyWriteExecute = true;
+        # No MemoryDenyWriteExecute: clankctl runs the devcontainers CLI
+        # (Node.js, which needs a JIT).
       };
     };
 
