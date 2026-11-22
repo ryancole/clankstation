@@ -10,5 +10,6 @@
     ./cleanup.nix
     ./update.nix
     ./web.nix
+    ./console.nix
   ];
 }

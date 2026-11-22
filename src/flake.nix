@@ -109,6 +109,7 @@
         s5-tailnet = import ./tests/s5-tailnet.nix { inherit self pkgs; };
         s6-push = import ./tests/s6-push.nix { inherit self pkgs; };
         s7-box = import ./tests/s7-box.nix { inherit self pkgs; };
+        s9-console = import ./tests/s9-console.nix { inherit self pkgs; };
       }
       // import ./tests/m1-storage.nix { inherit self pkgs disko; };
 

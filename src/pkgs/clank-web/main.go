@@ -8,6 +8,9 @@
 //	        tailnet get in, and their Tailscale identity is the login
 //	-setup  plain HTTP on the LAN: the first-run page that joins Tailscale
 //	-listen the app over plain HTTP with no login: the dev VM only
+//
+// With -console it serves nothing: it draws the box's status page on the
+// terminal it runs on (console.go).
 package main
 
 import (
@@ -45,10 +48,19 @@ func main() {
 	dockerSock := flag.String("docker", "/run/docker.sock", "Docker socket (to see which tasks run)")
 	clankctl := flag.String("clankctl", "clankctl", "clankctl executable (for actions)")
 	user := flag.String("user", "default", "household user for new tasks (CLANK_USER)")
+	console := flag.Bool("console", false, "draw the box's status page on this terminal instead of serving")
+	qrencode := flag.String("qrencode", "qrencode", "qrencode executable (for -console)")
 	flag.Parse()
 
 	running, invalidate := dockerRunning(*dockerSock)
 	store := &Store{Data: *data, Running: running, Invalidate: invalidate}
+	if *console {
+		err := runConsole(store, NewBox(*data), NewTailscale(*tsSock), &QR{Path: *qrencode}, 3*time.Second)
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	ui, err := fs.Sub(uiFiles, "ui/dist")
 	if err != nil {
 		log.Fatal(err)

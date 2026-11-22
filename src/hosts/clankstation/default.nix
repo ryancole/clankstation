@@ -24,6 +24,8 @@
   # are mounted by partition label. The one-disk variant sets dataDisk = null.
   # The web app over Tailscale, and the first-run page on the LAN (S5).
   clankstation.web.enable = true;
+  # The status page on the box's own screen (S9).
+  clankstation.console.enable = true;
 
   clankstation.storage = {
     bootDisk = lib.mkDefault "/dev/clank-boot";

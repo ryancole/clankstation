@@ -192,6 +192,30 @@ they are.
 - Pages keep the same addresses as on a phone (`#/task/<id>` and so on), so
   a link or notification opens the same place on either.
 
+### 3.9 The box's own screen (S9)
+
+A monitor plugged into the box shows a status page, not a login prompt. It
+can't change anything; it only says where to go. It updates by itself every
+few seconds.
+
+- **Top:** what to do next, with a QR code to scan for it:
+  - Not on Tailscale yet: "Set up this box. On a phone or PC on the same
+    network as this box, open http://clankstation.local (or http://<the
+    box's address>). Then follow the steps there." The QR code opens the
+    first-run page by address, since some phones can't find `.local` names.
+  - On Tailscale, HTTPS not turned on yet: "Finish setting up", the same way.
+  - Ready: "Open the app", its `https://…ts.net` address and "on a phone or
+    PC signed in to your Tailscale." The QR code opens the app.
+  - No network: "Not connected to a network. Plug a network cable into the
+    box." No QR code.
+- **Tasks:** "2 working   1 waiting   1 needs you" (or "Nothing running."),
+  then a row for each task that needs you ("Needs you" and its title), then
+  each task working, as many as fit.
+- **Problems,** marked "!": an update that didn't work or didn't finish, an
+  update waiting for a restart, a disk almost full (under 5 GB or 5% free).
+- **Bottom:** the version, free space, and "For an admin login, press
+  Alt+F2."
+
 ## 4. Turning events into plain language
 
 `events.jsonl` is Claude Code's `stream-json` output. The "Now" line and the
