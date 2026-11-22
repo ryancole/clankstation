@@ -17,6 +17,9 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -44,7 +47,81 @@ type ConsoleView struct {
 	// Tasks to name: the ones that need you, then the ones working.
 	Tasks   []ConsoleTask
 	Version string
-	Disks   []Disk
+	// What the box is using: memory, then each disk, then each GPU's own
+	// memory (only where the kernel reports it).
+	Usage []Usage
+}
+
+type Usage struct {
+	Name        string // Memory, Projects, System, GPU memory
+	Used, Total uint64
+}
+
+// Where memory and GPU memory are read from (tests point them elsewhere).
+var (
+	procMeminfo = "/proc/meminfo"
+	drmDir      = "/sys/class/drm"
+)
+
+// memoryUsage is RAM in use: MemTotal minus MemAvailable.
+func memoryUsage() (Usage, bool) {
+	kv := map[string]uint64{}
+	b, err := os.ReadFile(procMeminfo)
+	if err != nil {
+		return Usage{}, false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 {
+			if n, err := strconv.ParseUint(f[1], 10, 64); err == nil {
+				kv[strings.TrimSuffix(f[0], ":")] = n << 10 // kB
+			}
+		}
+	}
+	total, avail := kv["MemTotal"], kv["MemAvailable"]
+	if total == 0 || avail > total {
+		return Usage{}, false
+	}
+	return Usage{"Memory", total - avail, total}, true
+}
+
+// gpuUsage is each GPU's own memory (VRAM), from the amdgpu driver's
+// mem_info_vram_* files. Integrated graphics share the RAM, and NVIDIA's
+// driver (not on the box) reports none here: they show nothing.
+func gpuUsage() []Usage {
+	cards, _ := filepath.Glob(filepath.Join(drmDir, "card*", "device", "mem_info_vram_total"))
+	sort.Strings(cards)
+	var out []Usage
+	seen := map[string]bool{}
+	for _, tf := range cards {
+		dev := filepath.Dir(tf)
+		if real, err := filepath.EvalSymlinks(dev); err == nil {
+			if seen[real] {
+				continue // card0 and card0-DP-1 are the same device
+			}
+			seen[real] = true
+		}
+		total := readUint(tf)
+		used := readUint(filepath.Join(dev, "mem_info_vram_used"))
+		if total > 0 && used <= total {
+			out = append(out, Usage{"GPU memory", used, total})
+		}
+	}
+	if len(out) > 1 {
+		for i := range out {
+			out[i].Name = fmt.Sprintf("GPU %d memory", i+1)
+		}
+	}
+	return out
+}
+
+func readUint(p string) uint64 {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	return n
 }
 
 type ConsoleTask struct {
@@ -119,7 +196,17 @@ func gatherConsole(ctx context.Context, store *Store, box *Box, ts *Tailscale) C
 		}
 		v.Version += " (" + r + ")"
 	}
-	v.Disks = bs.Disks
+	if m, ok := memoryUsage(); ok {
+		v.Usage = append(v.Usage, m)
+	}
+	for _, d := range bs.Disks {
+		name := d.Name
+		if name == "Tasks and projects" {
+			name = "Projects"
+		}
+		v.Usage = append(v.Usage, Usage{name, d.Size - d.Free, d.Size})
+	}
+	v.Usage = append(v.Usage, gpuUsage()...)
 	if u := bs.Update; u != nil && (u.Interrupted || (u.Finished != "" && !u.OK)) {
 		v.Problems = append(v.Problems, u.Message)
 	}
@@ -295,12 +382,17 @@ func (f *frame) Text() string {
 	return b.String()
 }
 
-// ANSI draws the frame from the top-left corner. The bottom-right cell is
+// ANSI draws the frame from the top-left corner.
+func (f *frame) ANSI() string { return strings.Join(f.ANSIRows(), "") }
+
+// ANSIRows draws each row on its own (cursor to its start, then its cells),
+// so only the rows that changed need redrawing. The bottom-right cell is
 // left alone, so the console never scrolls.
-func (f *frame) ANSI() string {
-	var b strings.Builder
-	last := cell{r: -1}
+func (f *frame) ANSIRows() []string {
+	out := make([]string, f.rows)
 	for i, row := range f.c {
+		var b strings.Builder
+		last := cell{r: -1}
 		fmt.Fprintf(&b, "\x1b[%d;1H", i+1)
 		for j, c := range row {
 			if i == f.rows-1 && j == f.cols-1 {
@@ -316,8 +408,9 @@ func (f *frame) ANSI() string {
 			}
 			b.WriteRune(c.r)
 		}
+		out[i] = b.String()
 	}
-	return b.String()
+	return out
 }
 
 // renderConsole lays out a view on a cols x rows console.
@@ -387,9 +480,19 @@ func renderConsole(v ConsoleView, qr [][]bool, cols, rows int) *frame {
 		add(fmt.Sprintf("%d working   %d waiting   %d need%s you", v.Working, v.Waiting, v.NeedsYou, plural1(v.NeedsYou)), stNormal)
 	}
 
-	// Problems and task names go after the fixed lines, as room allows:
-	// the footer takes the last three rows.
-	maxRow := rows - 4
+	// The footer takes the last two rows; above it, what the box is using
+	// (if there's room). Problems and task names go after the fixed lines,
+	// as room allows.
+	usageTop := rows - 3 - len(v.Usage) // its title row
+	if len(v.Usage) == 0 || usageTop-2 < top+8 {
+		usageTop = rows - 2
+	} else {
+		f.put(usageTop, left, "This box", stTitle)
+		for i, u := range v.Usage {
+			drawUsage(f, usageTop+1+i, left, textW, u)
+		}
+	}
+	maxRow := usageTop - 2
 	row := top
 	for _, l := range lines {
 		for _, w := range wrap(l.s, textW) {
@@ -434,7 +537,7 @@ func renderConsole(v ConsoleView, qr [][]bool, cols, rows int) *frame {
 			qTop = row + 1
 			qLeft = (cols - qrW) / 2
 		}
-		if qrBeside || qTop+qrH <= rows-4 {
+		if qrBeside || qTop+qrH <= usageTop-1 {
 			for r := 0; r < qrH; r++ {
 				for c := 0; c < qrW; c++ {
 					color := func(dark bool) int {
@@ -457,17 +560,41 @@ func renderConsole(v ConsoleView, qr [][]bool, cols, rows int) *frame {
 	}
 
 	if v.Version != "" {
-		f.put(rows-3, 2, clip("Version "+v.Version, cols-4), stMuted)
-	}
-	var free []string
-	for _, d := range v.Disks {
-		free = append(free, fmt.Sprintf("%s %s", strings.ToLower(d.Name[:1])+d.Name[1:], humanBytes(d.Free)))
-	}
-	if len(free) > 0 {
-		f.put(rows-2, 2, clip("Free space: "+strings.Join(free, ", "), cols-4), stMuted)
+		f.put(rows-2, 2, clip("Version "+v.Version, cols-4), stMuted)
 	}
 	f.put(rows-1, 2, "For an admin login, press Alt+F2.", stMuted)
 	return f
+}
+
+// drawUsage draws one "Memory  ██████░░░░░░  5.2 of 16 GB" row: green, then
+// yellow from 70% used, red from 90%.
+func drawUsage(f *frame, row, col, width int, u Usage) {
+	const labelW = 13
+	amount := fmt.Sprintf("%s of %s", humanBytes(u.Used), humanBytes(u.Total))
+	barW := width - labelW - 2 - len(amount)
+	if barW > 30 {
+		barW = 30
+	}
+	f.put(row, col, clip(u.Name, labelW-1), stNormal)
+	if barW < 6 || u.Total == 0 { // too narrow for a bar: the numbers alone
+		f.put(row, col+labelW, clip(amount, width-labelW), stNormal)
+		return
+	}
+	frac := float64(u.Used) / float64(u.Total)
+	fill := int(frac*float64(barW) + 0.5)
+	if fill > barW {
+		fill = barW
+	}
+	st := stLabelOK
+	switch {
+	case frac >= 0.9:
+		st = style{fg: 9, bg: 0}
+	case frac >= 0.7:
+		st = stLabelYo
+	}
+	f.put(row, col+labelW, strings.Repeat("█", fill), st)
+	f.put(row, col+labelW+fill, strings.Repeat("░", barW-fill), stMuted)
+	f.put(row, col+labelW+barW+2, amount, stNormal)
 }
 
 func plural1(n int) string {
@@ -546,19 +673,25 @@ func runConsole(store *Store, box *Box, ts *Tailscale, qr *QR, every time.Durati
 	defer fmt.Fprint(out, "\x1b[0m\x1b[2J\x1b[H\x1b[?25h")
 
 	fmt.Fprint(out, "\x1b[0m\x1b[2J\x1b[?25l")
-	last := ""
+	var last []string
 	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
 		cols, rows := termSize(int(out.Fd()))
 		v := gatherConsole(context.Background(), store, box, ts)
-		s := renderConsole(v, qr.Matrix(v.QRURL()), cols, rows).ANSI()
-		if s != last {
-			if _, err := fmt.Fprint(out, s); err != nil {
+		now := renderConsole(v, qr.Matrix(v.QRURL()), cols, rows).ANSIRows()
+		var b strings.Builder
+		for i, r := range now {
+			if len(last) != len(now) || last[i] != r {
+				b.WriteString(r)
+			}
+		}
+		if b.Len() > 0 {
+			if _, err := fmt.Fprint(out, b.String()); err != nil {
 				return err
 			}
-			last = s
 		}
+		last = now
 		select {
 		case <-stop:
 			return nil

@@ -213,8 +213,12 @@ few seconds.
   each task working, as many as fit.
 - **Problems,** marked "!": an update that didn't work or didn't finish, an
   update waiting for a restart, a disk almost full (under 5 GB or 5% free).
-- **Bottom:** the version, free space, and "For an admin login, press
-  Alt+F2."
+- **This box,** just above the bottom: a bar and "5.2 GB of 16 GB" for
+  memory in use, each disk (Projects, System) and the GPU's own memory.
+  Bars are green, yellow from 70% used, red from 90%. GPU memory shows only
+  where the kernel reports it (AMD cards); integrated graphics share the
+  memory, and NVIDIA's driver isn't on the box.
+- **Bottom:** the version and "For an admin login, press Alt+F2."
 
 ## 4. Turning events into plain language
 

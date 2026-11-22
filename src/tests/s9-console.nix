@@ -42,6 +42,10 @@ pkgs.testers.runNixOSTest {
     clankstation.wait_until_tty_matches("1", "Nothing running")
     clankstation.wait_until_tty_matches("1", "For an admin login, press Alt\\+F2")
     clankstation.wait_until_tty_matches("1", r"Version 26\.05")
+    # What the box is using: memory and both disks (no GPU in a VM test).
+    clankstation.wait_until_tty_matches("1", "This box")
+    for name in ["Memory", "Projects", "System"]:
+        clankstation.wait_until_tty_matches("1", name + r" .* of \d")
     clankstation.screenshot("setup")
 
     # Tasks: one needs an answer, one waits in line, one is preparing.

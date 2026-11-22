@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -60,7 +61,12 @@ func TestRenderConsole(t *testing.T) {
 		},
 		Problems: []string{"The update didn't work. could not reach github"},
 		Version:  "26.05.1 (abc1234)",
-		Disks:    []Disk{{"Tasks and projects", 120 << 30, 200 << 30}, {"System", 3 << 29, 20 << 30}},
+		Usage: []Usage{
+			{"Memory", 52 << 30 / 10, 16 << 30},
+			{"Projects", 80 << 30, 200 << 30},
+			{"System", 37 << 29, 20 << 30},
+			{"GPU memory", 2 << 30, 8 << 30},
+		},
 	}
 	if v.QRURL() != v.AppURL {
 		t.Fatalf("QR: %q", v.QRURL())
@@ -71,7 +77,7 @@ func TestRenderConsole(t *testing.T) {
 	for _, want := range []string{
 		"Clankstation", "Open the app", "https://clankstation.tail1234.ts.net",
 		"1 working   2 waiting   1 needs you", "Needs you Make the contact form", "Working   Fix the tests",
-		"! The update didn't work.", "Version 26.05.1 (abc1234)", "Free space: tasks and projects 120 GB, system 1.5 GB",
+		"! The update didn't work.", "Version 26.05.1 (abc1234)", "This box", "5.2 GB of 16 GB", "80 GB of 200 GB", "18 GB of 20 GB", "2.0 GB of 8.0 GB",
 		"For an admin login, press Alt+F2.",
 	} {
 		if !strings.Contains(text, want) {
@@ -81,6 +87,12 @@ func TestRenderConsole(t *testing.T) {
 	// The QR code sits beside the text, 33 modules on 17 rows.
 	if n := strings.Count(text, "▀"); n != 33*17 {
 		t.Errorf("%d QR cells", n)
+	}
+	// Bars: 9 cells wide here; System is 93% used.
+	for _, l := range lines {
+		if strings.Contains(l, "System") && !strings.Contains(l, "████████░  18 GB of 20 GB") {
+			t.Errorf("system bar: %q", l)
+		}
 	}
 	if !strings.HasPrefix(lines[2], "  ▀") || !strings.Contains(lines[2], "Open the app") {
 		t.Errorf("row 2: %q", lines[2])
@@ -128,6 +140,21 @@ func TestGatherConsole(t *testing.T) {
 	write(t, filepath.Join(box.Data, "update", "update.json"), `{"started":"a","finished":"b","exit":1}`)
 	write(t, filepath.Join(box.Data, "update", "update.log"), "clankctl: could not reach github\n")
 
+	// Memory and GPU memory from fake /proc and /sys files.
+	fake := t.TempDir()
+	procMeminfo = filepath.Join(fake, "meminfo")
+	drmDir = filepath.Join(fake, "drm")
+	t.Cleanup(func() { procMeminfo, drmDir = "/proc/meminfo", "/sys/class/drm" })
+	write(t, procMeminfo, "MemTotal:       16384000 kB\nMemFree:         1000000 kB\nMemAvailable:   12288000 kB\n")
+	dev := filepath.Join(fake, "devices", "gpu0")
+	must(t, os.MkdirAll(dev, 0o755))
+	write(t, filepath.Join(dev, "mem_info_vram_total"), "8589934592\n")
+	write(t, filepath.Join(dev, "mem_info_vram_used"), "1073741824\n")
+	for _, c := range []string{"card0", "card0-DP-1"} {
+		must(t, os.MkdirAll(filepath.Join(drmDir, c), 0o755))
+		must(t, os.Symlink(dev, filepath.Join(drmDir, c, "device")))
+	}
+
 	get := func() ConsoleView {
 		return gatherConsole(context.Background(), store, box, NewTailscale(sock))
 	}
@@ -137,6 +164,11 @@ func TestGatherConsole(t *testing.T) {
 	}
 	if v.Version != "26.05.1 (rev-1)" || len(v.Problems) == 0 || !strings.Contains(v.Problems[0], "could not reach github") {
 		t.Fatalf("box: %+v", v)
+	}
+	if len(v.Usage) != 4 || v.Usage[0] != (Usage{"Memory", 4096000 << 10, 16384000 << 10}) ||
+		v.Usage[1].Name != "Projects" || v.Usage[2].Name != "System" || v.Usage[1].Total == 0 ||
+		v.Usage[3] != (Usage{"GPU memory", 1 << 30, 8 << 30}) {
+		t.Fatalf("usage: %+v", v.Usage)
 	}
 	wantStep := ConsoleSetup
 	if v.LANAddr == "" {

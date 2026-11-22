@@ -629,7 +629,10 @@ on the appliance): `clankstation-console` runs `clank-web -console` on tty1
 (`TTYPath`, `StandardInput=tty-force`) as `clankstation`, and
 `getty@tty1`/`autovt@tty1` are off. Every 3 s it reads tailscaled's status,
 the task list and the box status (as Settings does), and redraws only when
-the page changed. Keys typed there are swallowed (echo off); Alt+F2 switches
+the page changed (row by row). Memory in use is `MemTotal` minus
+`MemAvailable` from `/proc/meminfo`; GPU memory is the amdgpu driver's
+`mem_info_vram_used` and `_total` under `/sys/class/drm/card*/device` (one
+row per device). Keys typed there are swallowed (echo off); Alt+F2 switches
 to the admin login on tty2. What it shows is in `docs/gui.md` 3.9. The QR
 code is qrencode's ASCII output drawn with half blocks (two modules a row),
 light modules in white; it goes beside the text when the console is wide
