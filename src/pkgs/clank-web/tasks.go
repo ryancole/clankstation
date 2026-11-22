@@ -40,6 +40,8 @@ type Store struct {
 	Invalidate func()
 	// Push sends notifications (S6); nil when it isn't set up.
 	Push *Push
+	// Box is the box's version and updates (S7); nil means the real one.
+	Box *Box
 }
 
 func (s *Store) tasksDir() string { return filepath.Join(s.Data, "tasks") }

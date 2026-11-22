@@ -24,6 +24,8 @@ package main
 //   POST /api/push/unsubscribe   {endpoint}
 //   POST /api/push/test          {endpoint}: a test notification to that device
 //
+// The box (S7, box.go): GET /api/box, POST /api/box/check, POST /api/box/update
+//
 // Terminals and Claude (S3):
 //   GET /api/claude              Claude Code installed / signed in (claude.go)
 //   GET /api/terminals           open terminal sessions [{kind, task}]
@@ -112,6 +114,25 @@ func newServer(s *Store, c *Clankctl, ui fs.FS) http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	box := s.Box
+	if box == nil {
+		box = NewBox(s.Data)
+	}
+	mux.HandleFunc("GET /api/box", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, box.Status())
+	})
+	for _, action := range []string{"check", "update"} {
+		mux.HandleFunc("POST /api/box/"+action, func(w http.ResponseWriter, r *http.Request) {
+			if !sameOrigin(w, r) {
+				return
+			}
+			if err := box.Request(action); err != nil {
+				writeError(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+		})
+	}
 	mux.HandleFunc("GET /api/claude", func(w http.ResponseWriter, r *http.Request) {
 		st, err := claude.get(r.Context(), c)
 		if err != nil {

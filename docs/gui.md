@@ -155,9 +155,14 @@ add`; a failed clone shows git's message under "Details".
   is open on screen: it's in Notification Center.
 - **Install the app:** instructions for this browser (Add to Home Screen /
   Install).
-- **The box (S7):** current version, **Check for updates**, **Update now**
-  (`clankctl update`), with a warning when a restart is needed for a new
-  kernel. Free space on the data disk.
+- **The box (S7):** the version (Clankstation's commit and NixOS), **Check
+  for updates** (asks GitHub only when tapped), then **Update now** when a
+  newer version is out (asks first; "Updating…" while it builds, and "The
+  app is restarting" if the page loses the box on the way). The result
+  ("Updated.", or why it didn't work), with the last update's output under
+  "Details". A note to restart the box when an update brought a new kernel
+  (no restart button). Free space: "Tasks and projects" (the data disk) and
+  "System". Projects is linked below.
 
 ## 4. Turning events into plain language
 

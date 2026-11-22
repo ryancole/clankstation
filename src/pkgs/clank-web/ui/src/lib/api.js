@@ -93,3 +93,8 @@ export const getPushKey = () => getJSON('/api/push/key');
 export const pushSubscribe = (sub) => postJSON('/api/push/subscribe', sub);
 export const pushUnsubscribe = (endpoint) => postJSON('/api/push/unsubscribe', { endpoint });
 export const pushTest = (endpoint) => postJSON('/api/push/test', { endpoint });
+
+// The box (S7): version, updates, free space.
+export const getBox = () => getJSON('/api/box');
+export const checkForUpdates = () => postJSON('/api/box/check');
+export const updateBox = () => postJSON('/api/box/update');

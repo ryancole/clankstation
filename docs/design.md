@@ -51,7 +51,7 @@ broad permissions inside their environment.
 | Installer | Offline ISO with prebuilt systems + disko scripts for both layouts; disks chosen at install via fixed `/dev/clank-{boot,data}` links | Settled (M7) |
 | Windows base images | Unattended install from the user's ISO via an answer-file CD; generic key (unactivated) unless one is given; Secure Boot off + check bypass; TPM 2.0 via swtpm; local `agent` account; host drives VMs over OpenSSH | Settled (M8) |
 | First client | Installable web app (PWA) served by the box. For phone and PC alike, and for non-technical users. Day one: queue, status, result; push on done/needs input; reply/keep going; terminal take-over in the browser | Settled (2026-11-20) |
-| Updates | Manual `clankctl update`: `nixos-rebuild switch --refresh --flake github:ryancole/clankstation/master?dir=src#<host>` (public repo, latest `master`). No update timer; the GUI triggers it later | Settled (M10) |
+| Updates | Manual `clankctl update`: `nixos-rebuild switch --refresh --flake github:ryancole/clankstation/master?dir=src#<host>` (public repo, latest `master`). No update timer; the app's Settings triggers it too (S7) | Settled (M10) |
 | Task retention | A daily timer removes a finished task's worktree (and overlay) 7 days after it finished; results and logs stay until `clankctl delete` | Settled (M10) |
 | Web stack | Backend in Go (one static binary, `buildGoModule`; creack/pty for the terminal, a web push library, standard `net/http`). Frontend: a Svelte 5 single-page PWA built with Vite (`buildNpmPackage`), embedded in the binary; xterm.js for the browser terminal. Everything from the pinned nixpkgs, no new flake inputs. The service calls `clankctl` for task changes at first and reads the task files directly. Chosen over Rust mainly for build time and RAM: the box builds its own updates | Settled (2026-11-21) |
 | API and event protocol | REST + JSON for actions. Server-Sent Events for live task events, with the event's sequence number as the SSE `id` so a reconnect resumes where it left off. One WebSocket per browser terminal. Raw harness output stays in `events.jsonl` as the record; the harness adapter (section 6) turns it into a small versioned Clankstation stream (`{v:1, seq, type: turn/message/step/step_result/plan/result/state, ...}`, where `seq` is the `events.jsonl` line number), and the GUI depends only on that | Settled (2026-11-21) |
@@ -62,6 +62,7 @@ broad permissions inside their environment.
 | Joining Tailscale (S5) | A first-run page on `http://clankstation.local` (plain HTTP, setup only) shows Tailscale's own sign-in link; once the box has joined, it sends you to its `https://…ts.net` address. The box never handles Tailscale credentials | Settled (2026-11-22) |
 | Where the app is served (S5) | HTTPS on the box's `*.ts.net` name only, at home and away. Plain HTTP on the LAN serves only the first-run page, or a link to the `ts.net` address | Settled (2026-11-22) |
 | Push notifications (S6) | Web push with the box's own VAPID key pair, sent with `webpush-go` (Go module, pinned in `go.sum`). Keys, device subscriptions and the notifier's last-seen task states live in `settings/push/` on the data disk | Settled (2026-11-22) |
+| Updates from the app (S7) | `clank-web` (unprivileged) asks by writing `check` or `update` to `settings/update-request`; a root `clankstation-update` service, started by a systemd path unit, runs `clankctl update [--check]` and writes the result to `update/` (root-owned). The update runs outside `clank-web`, which the rebuild may restart, and the rebuild doesn't restart it. "Check for updates" contacts GitHub only when tapped. No restart button: a new kernel shows a "restart the box" note | Settled (2026-11-22) |
 | HTTPS and remote access | Default: Tailscale (`services.tailscale` from nixpkgs, no new flake input). The app is served at the box's `*.ts.net` name with Tailscale's Let's Encrypt certificate, the same name at home and away (the PWA, service worker and push subscriptions are tied to one origin). The owner signs in to Tailscale through its own flow. Alternative, documented: the owner's own domain with an ACME DNS-01 certificate (`security.acme`), where the owner handles reachability (port forward, split DNS). LAN-only fallback: a box-local CA, name-constrained to the box, installed per device (also used on the dev VM). Not offered: tunnel services that terminate TLS (they would see the terminal during harness sign-in). Reachable from outside the home means the GUI always requires a household login | Settled (2026-11-21) |
 
 ## 4. Architecture
@@ -187,6 +188,9 @@ Directory tree, created with `systemd.tmpfiles`:
     tools/<name>.qcow2        optional shared toolchain disks (large SDKs), overlaid per task
   tasks/.queue.lock           held while the queue checks for a free slot and starts a task
   settings/box.env            box settings set at runtime (max_running=, default 1)
+  settings/update-request     the app asking for `check` or `update` (S7), until the root service takes it
+  update/                     root-owned: check.json, update.json ({started, finished, exit})
+                              and their .log (clankctl update's output), for the app
   settings/push/              web push (S6): vapid.json (the box's key pair, 0600),
                               subscriptions.json (one per device), seen.json
                               (each task's last state, so restarts don't repeat
@@ -603,6 +607,21 @@ The payload is `{title, body, url, tag}`; the service worker shows it, and
 tapping opens the task. A device whose subscription is gone (404/410) is
 forgotten.
 
+The box (S7, `box.go`; `src/modules/update.nix`): Settings shows the
+running version (`nixos-version --json`: Clankstation's commit and NixOS),
+free space on the data disk and the system disk (`/nix/store`), and a note
+when an update brought a kernel the box hasn't booted yet
+(`/run/current-system/kernel` vs `/run/booted-system/kernel`). **Check for
+updates** and **Update now** go through the root `clankstation-update`
+service (decisions table): `clank-web` writes the request file, a path unit
+starts the service, which runs `clankctl update [--check]` with
+`/run/clankstation-update` present while it runs, and writes
+`update/<action>.json` and `.log`. The service has `restartIfChanged` and
+`stopIfChanged` off, so the switch it runs doesn't kill it; `clank-web`
+restarting on the way only means the page reconnects and reads the result.
+An update that started and never finished (the box restarted) shows as
+interrupted. **Update now** appears once a check found a newer commit.
+
 ### 8.1 Milestones (service layer)
 
 Each is verified on the dev VM (and a NixOS VM test where it fits).
@@ -615,7 +634,7 @@ Each is verified on the dev VM (and a NixOS VM test where it fits).
 | S4 | Queue and concurrency limit (`queued` state); take-over out of the app | With a limit of 1, a second task waits, then starts on its own. Done: `s4-queue` VM test (line order, take out of line and start later, replies wait, CLI and web share one line, a limit of 2 runs two) and the full `nix flake check`; on the dev VM two real Claude Code tasks were queued and the second started by itself when the first finished |
 | S5 | Login, Tailscale, HTTPS, installable PWA | Installed on a phone, reachable away from home, login required. So far: `s5-tailnet` VM test (real tailscaled on the box and a "phone" with Headscale: first-run page before and after joining, the phone gets in as its Tailscale user, the box's own loopback and a LAN device are refused); on the dev VM (2026-11-22), the real flow: first-run page, Tailscale sign-in, HTTPS enabled in the admin console, a Let's Encrypt certificate for its ts.net name, and the app opened and installed on a phone over Tailscale. Done (2026-11-22): on the Hyper-V box after `clankctl update`, the box joined the tailnet from the first-run page, and the app on a phone opened over Tailscale on Wi-Fi and on mobile data; Claude signed in and the phone terminal's Paste worked |
 | S6 | Web push | The phone gets "Done" and "Claude has a question". So far: `s6-push` VM test (a stand-in push service that decrypts what the box sends like a phone would: the test button, "Done", "Claude has a question", a reply that finishes, nothing for a stopped task), Go tests that decrypt the payload (RFC 8291). On the box (2026-11-22): turned on from the home-screen app on an iPhone, and the test notification arrived (a Sleep Focus had hidden it at first). Still to check: a task's "Done" or "Claude has a question" on the phone |
-| S7 | Box settings: updates, storage | "Update now" works from the GUI |
+| S7 | Box settings: updates, storage | "Update now" works from the GUI. So far: `s7-box` VM test (version and free space, cross-site refusal, a check, an update through an app restart, a check that can't reach GitHub, an interrupted update) and Go tests. Still to check: a real update from the app on the box |
 
 ## 9. Open questions
 

@@ -1,5 +1,6 @@
 <script>
-  import { getClaude, getMe } from '../lib/api.js';
+  import { getClaude, getMe, getBox, checkForUpdates, updateBox } from '../lib/api.js';
+  import { ago } from '../lib/states.js';
   import { pushSupport, currentSubscription, turnOn, turnOff, sendTest } from '../lib/push.js';
 
   let claude = $state(null);
@@ -62,6 +63,61 @@
       pushBusy = '';
     }
   }
+
+  // The box (S7). While it checks or updates, ask again every few seconds;
+  // an update can restart the app, so a failed fetch means "restarting".
+  let box = $state(null);
+  let boxErr = $state('');
+  let boxBusy = $state('');
+  let unreachable = $state(false);
+
+  async function loadBox() {
+    try {
+      box = await getBox();
+      unreachable = false;
+    } catch {
+      unreachable = true;
+    }
+  }
+
+  $effect(() => {
+    loadBox();
+    const t = setInterval(() => {
+      if (box?.busy || unreachable) loadBox();
+    }, 3000);
+    return () => clearInterval(t);
+  });
+
+  async function boxAction(kind) {
+    if (kind === 'update' && !confirm(
+      'Update the box now? It downloads and builds the new version, which can take a while. ' +
+      'The app may disconnect for a moment while it restarts.')) return;
+    boxErr = '';
+    boxBusy = kind;
+    try {
+      await (kind === 'update' ? updateBox() : checkForUpdates());
+      await loadBox();
+    } catch (e) {
+      boxErr = e.message;
+    } finally {
+      boxBusy = '';
+    }
+  }
+
+  function shortRev(rev) {
+    if (!rev) return 'unknown';
+    const dirty = rev.endsWith('-dirty');
+    const r = /^[0-9a-f]{40}/.test(rev) ? rev.slice(0, 7) : rev.replace(/-dirty$/, '');
+    return dirty ? `${r} (local changes)` : r;
+  }
+
+  function size(bytes) {
+    const gb = bytes / 1e9;
+    if (gb >= 1000) return `${(gb / 1000).toFixed(1)} TB`;
+    return gb >= 10 ? `${Math.round(gb)} GB` : `${gb.toFixed(1)} GB`;
+  }
+
+  const newVersion = $derived(box?.check?.ok && !box.check.up_to_date && box.check.latest);
 
   const PLANS = { pro: 'Pro', max: 'Max', team: 'Team', enterprise: 'Enterprise' };
 </script>
@@ -160,7 +216,88 @@
   {#if pushErr}<p class="error-box note" role="alert">{pushErr}</p>{/if}
 
   <h2 class="section-title">The box</h2>
-  <a class="card row link" href="#/projects">
+  <div class="card group">
+    {#if !box}
+      <p class="row muted">{unreachable ? "Can't reach the box right now." : 'Checking the box…'}</p>
+    {:else}
+      <div class="row">
+        <span class="label">Version</span>
+        <span class="muted small mono">{shortRev(box.version.revision)}{box.version.nixos ? ` · NixOS ${box.version.nixos.split('.').slice(0, 2).join('.')}` : ''}</span>
+      </div>
+      {#if !box.updates}
+        <p class="row muted small">Updates are off on this box.</p>
+      {:else if box.busy === 'update'}
+        <div class="row">
+          <span class="text">
+            <span class="label">Updating…</span>
+            <span class="muted small">{unreachable
+              ? 'The app is restarting. This page reconnects by itself.'
+              : 'Downloading and building the new version. This can take a while; you can leave this page.'}</span>
+          </span>
+        </div>
+      {:else}
+        <div class="row">
+          <span class="text">
+            {#if box.busy === 'check'}
+              <span class="label">Checking for updates…</span>
+            {:else if newVersion}
+              <span class="label">A new version is available</span>
+              <span class="muted small mono">{shortRev(box.check.latest)}</span>
+            {:else if box.check?.ok}
+              <span class="label">Up to date</span>
+              <span class="muted small">Checked {ago(box.check.finished)}</span>
+            {:else}
+              <span class="label">Updates</span>
+              <span class="muted small">From Clankstation on GitHub</span>
+            {/if}
+          </span>
+          {#if newVersion}
+            <button class="btn small primary" onclick={() => boxAction('update')} disabled={!!boxBusy}>
+              {boxBusy === 'update' ? 'Starting…' : 'Update now'}
+            </button>
+          {:else}
+            <button class="btn small" onclick={() => boxAction('check')} disabled={!!boxBusy || !!box.busy}>
+              {boxBusy === 'check' || box.busy === 'check' ? 'Checking…' : 'Check for updates'}
+            </button>
+          {/if}
+        </div>
+      {/if}
+      {#each box.disks as d}
+        <div class="row">
+          <span class="text grow">
+            <span class="label">{d.name}</span>
+            <span class="bar" aria-hidden="true"><span style={`width: ${d.size ? Math.round(100 * (1 - d.free / d.size)) : 0}%`}></span></span>
+          </span>
+          <span class="muted small">{size(d.free)} free of {size(d.size)}</span>
+        </div>
+      {/each}
+    {/if}
+  </div>
+  {#if box?.restart_needed && !box.busy}
+    <p class="note warn small" role="status">Restart the box to finish the update: it brought a new system kernel.
+      Over SSH: <span class="mono">sudo reboot</span></p>
+  {/if}
+  {#if box?.check && !box.check.ok && !box.busy}
+    <p class="error-box note" role="alert">{box.check.message}</p>
+  {/if}
+  {#if box?.update?.finished || box?.update?.interrupted}
+    {#if !box.busy}
+      {#if box.update.ok}
+        <p class="note small ok" role="status">{box.update.message} <span class="muted">({ago(box.update.finished)})</span></p>
+      {:else}
+        <p class="error-box note" role="alert">{box.update.message}</p>
+      {/if}
+      {#if box.update.log}
+        <details class="note small">
+          <summary class="muted">Details of the last update</summary>
+          <pre class="log mono">{box.update.log}</pre>
+        </details>
+      {/if}
+    {/if}
+  {/if}
+  {#if boxErr}<p class="error-box note" role="alert">{boxErr}</p>{/if}
+
+  <a class="card row link projects" href="#/projects">
     <span class="label">Projects</span>
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg>
   </a>
@@ -180,4 +317,10 @@
   .note { margin: 8px 4px 0; line-height: 1.4; }
   .link { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border); }
   .btn { flex-shrink: 0; }
+  .grow { flex: 1; }
+  .bar { display: block; height: 6px; margin-top: 6px; border-radius: 3px; background: var(--sunken); overflow: hidden; max-width: 220px; }
+  .bar > span { display: block; height: 100%; background: var(--muted); }
+  .warn { color: var(--needs-fg); }
+  .projects { margin-top: 12px; }
+  .log { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--sunken); padding: 10px 12px; border-radius: 10px; max-height: 320px; overflow-y: auto; }
 </style>

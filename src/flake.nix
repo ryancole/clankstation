@@ -108,6 +108,7 @@
         s4-queue = import ./tests/s4-queue.nix { inherit self pkgs; };
         s5-tailnet = import ./tests/s5-tailnet.nix { inherit self pkgs; };
         s6-push = import ./tests/s6-push.nix { inherit self pkgs; };
+        s7-box = import ./tests/s7-box.nix { inherit self pkgs; };
       }
       // import ./tests/m1-storage.nix { inherit self pkgs disko; };
 
