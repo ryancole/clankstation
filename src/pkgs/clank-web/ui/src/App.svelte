@@ -6,6 +6,7 @@
   import Projects from './routes/Projects.svelte';
   import Settings from './routes/Settings.svelte';
   import Sidebar from './lib/Sidebar.svelte';
+  import ConnectionBanner from './lib/ConnectionBanner.svelte';
   import { MediaQuery } from 'svelte/reactivity';
   // The terminal (xterm.js) is most of the app's size: load it when opened.
   const loadTerminal = () => import('./routes/Terminal.svelte');
@@ -62,6 +63,8 @@
   <Home />
 {/if}
 {/snippet}
+
+<ConnectionBanner />
 
 {#if wide.current && route.page !== 'terminal'}
   <div class="shell">

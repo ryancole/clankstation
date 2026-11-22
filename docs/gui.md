@@ -220,6 +220,25 @@ few seconds.
   memory, and NVIDIA's driver isn't on the box.
 - **Bottom:** the version and "For an admin login, press Alt+F2."
 
+### 3.10 Losing the connection
+
+When the app can't reach the box (the phone lost its network, Tailscale is
+off, or the box is restarting or updating), a small "Reconnecting…" banner
+with a spinner sits at the top of every screen, over whatever is showing.
+What's on screen stays as it was; nothing is cleared. The app tries the box
+again every few seconds by itself. When the box answers, the banner says
+"Connected" for two seconds and the page refreshes at once (the task list,
+and a task's live progress) instead of waiting for its next refresh.
+
+- It notices: a request that fails, the live progress of a task dropping, the
+  phone saying it's offline, and a quick check every 10 seconds while the app
+  is on screen (a connection can go quiet without failing).
+- Coming back to the app (it was in the background or the phone slept), it
+  checks right away. If the box answers within a moment, nothing shows;
+  otherwise the banner does.
+- The terminal (Settings' install and sign-in) keeps its own "Connection
+  lost. Reconnecting…" line as well.
+
 ## 4. Turning events into plain language
 
 `events.jsonl` is Claude Code's `stream-json` output. The "Now" line and the

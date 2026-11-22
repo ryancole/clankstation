@@ -4,11 +4,10 @@
   import { groupTasks, when, pollTasks } from '../lib/taskList.js';
 
   let tasks = $state(null);
-  let error = $state('');
   let showOlder = $state(false);
 
-  $effect(() => pollTasks(listTasks, (t) => { tasks = t; error = ''; },
-    () => (error = "Can't reach the box right now. Retrying…")));
+  // Can't reach the box: the connection banner says so (App.svelte).
+  $effect(() => pollTasks(listTasks, (t) => (tasks = t), () => {}));
 
   const groups = $derived(groupTasks(tasks));
 </script>
@@ -20,8 +19,6 @@
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>
     </a>
   </div>
-
-  {#if error}<p class="notice">{error}</p>{/if}
 
   {#snippet card(t)}
     {@const info = stateInfo(t)}
@@ -38,7 +35,7 @@
     </a>
   {/snippet}
 
-  {#if tasks === null && !error}
+  {#if tasks === null}
     <p class="empty">Loading…</p>
   {:else if tasks && tasks.length === 0}
     <p class="empty">Nothing yet. Give Claude its first task with <strong>New task</strong>.</p>
@@ -92,7 +89,6 @@
     display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .activity { font-size: 14px; color: var(--text-2); line-height: 1.4; overflow-wrap: anywhere;
     display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .notice { background: var(--needs-bg); color: var(--needs-fg); padding: 10px 14px; border-radius: 12px; font-size: 14px; }
   .older {
     min-height: 44px; border: 1px solid var(--border-strong); background: var(--surface);
     color: var(--text); border-radius: 12px; font: inherit; font-weight: 600; cursor: pointer;

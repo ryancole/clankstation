@@ -1,6 +1,7 @@
 // The task list's groups (docs/gui.md 3.1), shared by Home on a phone and
 // the side list on a PC (3.8).
 import { stateInfo, ago } from './states.js';
+import { onReconnect } from './connection.svelte.js';
 
 const WEEK = 7 * 86400 * 1000;
 
@@ -41,8 +42,10 @@ export function pollTasks(listTasks, onTasks, onError) {
   }
   refresh();
   const timer = setInterval(refresh, 3000);
+  const off = onReconnect(refresh); // don't wait for the next tick
   return () => {
     stopped = true;
+    off();
     clearInterval(timer);
   };
 }

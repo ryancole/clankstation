@@ -1,7 +1,23 @@
 // The box's API (protocol v1, see api.go).
+import { lost, reached, onReconnect } from './connection.svelte.js';
+
+// fetch, telling the connection banner whether the box answered.
+async function boxFetch(path, init) {
+  let r;
+  try {
+    r = await fetch(path, init);
+  } catch (e) {
+    lost();
+    throw e;
+  }
+  // 502-504: something in between (a dev proxy) couldn't reach the box.
+  if (r.status >= 502 && r.status <= 504) lost();
+  else reached();
+  return r;
+}
 
 async function getJSON(path) {
-  const r = await fetch(path, { headers: { Accept: 'application/json' } });
+  const r = await boxFetch(path, { headers: { Accept: 'application/json' } });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`${path}: ${r.status}`);
   return r.json();
@@ -24,6 +40,7 @@ export function taskEvents(id, onEvent) {
   function open() {
     const after = lastId ? `?after=${lastId}` : '';
     es = new EventSource(`/api/tasks/${encodeURIComponent(id)}/events${after}`);
+    es.onopen = reached;
     es.onmessage = (m) => {
       if (m.lastEventId) lastId = Number(m.lastEventId) || lastId;
       try {
@@ -34,16 +51,28 @@ export function taskEvents(id, onEvent) {
       }
     };
     es.onerror = () => {
-      if (es.readyState === EventSource.CLOSED && !stopped) {
+      if (stopped) return;
+      lost();
+      if (es.readyState === EventSource.CLOSED) {
         clearTimeout(timer);
         timer = setTimeout(open, 3000);
       }
     };
   }
 
+  // Back in touch with the box (or back from the background, where a
+  // stream can go quiet without an error): open a fresh stream now.
+  const off = onReconnect(() => {
+    if (stopped) return;
+    clearTimeout(timer);
+    es?.close();
+    open();
+  });
+
   open();
   return () => {
     stopped = true;
+    off();
     clearTimeout(timer);
     es?.close();
   };
@@ -54,7 +83,7 @@ export function taskEvents(id, onEvent) {
 async function postJSON(path, body) {
   let r;
   try {
-    r = await fetch(path, {
+    r = await boxFetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(body ?? {}),
@@ -80,7 +109,7 @@ export const reply = (id, prompt) => postJSON(`/api/tasks/${encodeURIComponent(i
 export const stopTask = (id) => postJSON(`/api/tasks/${encodeURIComponent(id)}/stop`);
 
 export async function getClaude() {
-  const r = await fetch('/api/claude', { headers: { Accept: 'application/json' } });
+  const r = await boxFetch('/api/claude', { headers: { Accept: 'application/json' } });
   const data = await r.json().catch(() => null);
   if (!r.ok) throw new Error(data?.error ?? "Couldn't check Claude on the box.");
   return data;

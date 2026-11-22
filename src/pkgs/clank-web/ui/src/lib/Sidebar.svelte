@@ -7,10 +7,10 @@
   let { route } = $props();
 
   let tasks = $state(null);
-  let error = $state(false);
   let showOlder = $state(false);
 
-  $effect(() => pollTasks(listTasks, (t) => { tasks = t; error = false; }, () => (error = true)));
+  // Can't reach the box: the connection banner says so (App.svelte).
+  $effect(() => pollTasks(listTasks, (t) => (tasks = t), () => {}));
 
   const groups = $derived(groupTasks(tasks));
   const selected = $derived(route.page === 'task' || route.page === 'changes' ? route.id : '');
@@ -26,8 +26,6 @@
   </a>
 
   <nav class="tasks">
-    {#if error}<p class="notice">Can't reach the box right now. Retrying…</p>{/if}
-
     {#snippet row(t)}
       {@const info = stateInfo(t)}
       <a class="row" class:selected={t.id === selected} href={`#/task/${encodeURIComponent(t.id)}`}
@@ -46,7 +44,7 @@
       </a>
     {/snippet}
 
-    {#if tasks === null && !error}
+    {#if tasks === null}
       <p class="empty-list">Loading…</p>
     {:else if tasks && tasks.length === 0}
       <p class="empty-list">Nothing yet. Give Claude its first task with <strong>New task</strong>.</p>
@@ -110,7 +108,6 @@
     display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   }
   .empty-list { padding: 16px 10px; color: var(--muted); font-size: 14px; line-height: 1.4; }
-  .notice { margin: 8px 6px; background: var(--needs-bg); color: var(--needs-fg); padding: 8px 12px; border-radius: 10px; font-size: 13px; }
   .older {
     width: calc(100% - 12px); margin: 6px; min-height: 36px; border: 1px solid var(--border-strong);
     background: var(--surface); color: var(--text); border-radius: 10px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
