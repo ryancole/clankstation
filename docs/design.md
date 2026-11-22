@@ -61,6 +61,7 @@ broad permissions inside their environment.
 | Login (S5) | Tailscale identity: the app is reachable only over Tailscale, and `clank-web` asks the local `tailscaled` who each connecting device belongs to (whois). Reaching the box on the tailnet, as Tailscale's own access rules allow, is the login; no Clankstation passwords | Settled (2026-11-22) |
 | Joining Tailscale (S5) | A first-run page on `http://clankstation.local` (plain HTTP, setup only) shows Tailscale's own sign-in link; once the box has joined, it sends you to its `https://…ts.net` address. The box never handles Tailscale credentials | Settled (2026-11-22) |
 | Where the app is served (S5) | HTTPS on the box's `*.ts.net` name only, at home and away. Plain HTTP on the LAN serves only the first-run page, or a link to the `ts.net` address | Settled (2026-11-22) |
+| Push notifications (S6) | Web push with the box's own VAPID key pair, sent with `webpush-go` (Go module, pinned in `go.sum`). Keys, device subscriptions and the notifier's last-seen task states live in `settings/push/` on the data disk | Settled (2026-11-22) |
 | HTTPS and remote access | Default: Tailscale (`services.tailscale` from nixpkgs, no new flake input). The app is served at the box's `*.ts.net` name with Tailscale's Let's Encrypt certificate, the same name at home and away (the PWA, service worker and push subscriptions are tied to one origin). The owner signs in to Tailscale through its own flow. Alternative, documented: the owner's own domain with an ACME DNS-01 certificate (`security.acme`), where the owner handles reachability (port forward, split DNS). LAN-only fallback: a box-local CA, name-constrained to the box, installed per device (also used on the dev VM). Not offered: tunnel services that terminate TLS (they would see the terminal during harness sign-in). Reachable from outside the home means the GUI always requires a household login | Settled (2026-11-21) |
 
 ## 4. Architecture
@@ -186,6 +187,10 @@ Directory tree, created with `systemd.tmpfiles`:
     tools/<name>.qcow2        optional shared toolchain disks (large SDKs), overlaid per task
   tasks/.queue.lock           held while the queue checks for a free slot and starts a task
   settings/box.env            box settings set at runtime (max_running=, default 1)
+  settings/push/              web push (S6): vapid.json (the box's key pair, 0600),
+                              subscriptions.json (one per device), seen.json
+                              (each task's last state, so restarts don't repeat
+                              or miss a notification)
   cache/                      shared build caches (later)
 ```
 
@@ -581,9 +586,22 @@ socket (standard library only): `status`, `whois`, `cert/<name>`,
   across runs.
 
 The app is installable (web app manifest, icons, a service worker that
-caches nothing; push comes in S6). Pages use `Referrer-Policy: same-origin`:
+caches nothing). Pages use `Referrer-Policy: same-origin`:
 under `no-referrer` browsers send `Origin: null` on form posts, which the
 cross-site check refuses.
+
+Notifications (S6, `push.go`): web push with the box's own VAPID key pair,
+sent with `webpush-go` (encryption RFC 8291, VAPID RFC 8292; the "sub"
+claim is the box's https address). A device turns them on in Settings; its
+browser's push subscription is stored with the Tailscale login and device
+it came from. A notifier checks the task list every 3 s and sends one
+notification when a turn ends (docs/gui.md section 5), to every device:
+done, needs an answer, failed, or interrupted by a restart; nothing for a
+stopped task. Each task's last state is kept in `seen.json`, so a restart
+neither repeats a notification nor misses a task the restart interrupted.
+The payload is `{title, body, url, tag}`; the service worker shows it, and
+tapping opens the task. A device whose subscription is gone (404/410) is
+forgotten.
 
 ### 8.1 Milestones (service layer)
 
@@ -596,7 +614,7 @@ Each is verified on the dev VM (and a NixOS VM test where it fits).
 | S3 | Browser terminal: take over (WebSocket + PTY), Claude install and sign-in from Settings | Take over and hand back work from the browser. Done: `s3-terminal` VM test (take over a working task, leave and reconnect, hand back with the diff refreshed, sign-in code not in the service's log, Claude status without the email); on the dev VM, real Claude Code was taken over mid-task from the browser, given an instruction, and handed back with its file in the changes |
 | S4 | Queue and concurrency limit (`queued` state); take-over out of the app | With a limit of 1, a second task waits, then starts on its own. Done: `s4-queue` VM test (line order, take out of line and start later, replies wait, CLI and web share one line, a limit of 2 runs two) and the full `nix flake check`; on the dev VM two real Claude Code tasks were queued and the second started by itself when the first finished |
 | S5 | Login, Tailscale, HTTPS, installable PWA | Installed on a phone, reachable away from home, login required. So far: `s5-tailnet` VM test (real tailscaled on the box and a "phone" with Headscale: first-run page before and after joining, the phone gets in as its Tailscale user, the box's own loopback and a LAN device are refused); on the dev VM (2026-11-22), the real flow: first-run page, Tailscale sign-in, HTTPS enabled in the admin console, a Let's Encrypt certificate for its ts.net name, and the app opened and installed on a phone over Tailscale. Done (2026-11-22): on the Hyper-V box after `clankctl update`, the box joined the tailnet from the first-run page, and the app on a phone opened over Tailscale on Wi-Fi and on mobile data; Claude signed in and the phone terminal's Paste worked |
-| S6 | Web push | The phone gets "Done" and "Claude has a question" |
+| S6 | Web push | The phone gets "Done" and "Claude has a question". So far: `s6-push` VM test (a stand-in push service that decrypts what the box sends like a phone would: the test button, "Done", "Claude has a question", a reply that finishes, nothing for a stopped task), Go tests that decrypt the payload (RFC 8291). Still to check: a real phone, on the box |
 | S7 | Box settings: updates, storage | "Update now" works from the GUI |
 
 ## 9. Open questions

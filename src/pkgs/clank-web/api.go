@@ -18,6 +18,12 @@ package main
 //
 // Who you are (S5): GET /api/me  {login, name, node} from Tailscale
 //
+// Notifications (S6, push.go):
+//   GET  /api/push/key           {key}: the box's VAPID public key
+//   POST /api/push/subscribe     a PushSubscription (endpoint, keys)
+//   POST /api/push/unsubscribe   {endpoint}
+//   POST /api/push/test          {endpoint}: a test notification to that device
+//
 // Terminals and Claude (S3):
 //   GET /api/claude              Claude Code installed / signed in (claude.go)
 //   GET /api/terminals           open terminal sessions [{kind, task}]
@@ -25,6 +31,7 @@ package main
 //                                (terminal.go has the protocol)
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +45,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	webpush "github.com/SherClockHolmes/webpush-go"
 )
 
 func newServer(s *Store, c *Clankctl, ui fs.FS) http.Handler {
@@ -49,6 +58,59 @@ func newServer(s *Store, c *Clankctl, ui fs.FS) http.Handler {
 	})
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, identityFrom(r.Context()))
+	})
+	pushOff := func(w http.ResponseWriter) bool {
+		if s.Push == nil {
+			writeError(w, &ActionError{"Notifications aren't set up on this box."})
+			return true
+		}
+		return false
+	}
+	mux.HandleFunc("GET /api/push/key", func(w http.ResponseWriter, r *http.Request) {
+		if pushOff(w) {
+			return
+		}
+		writeJSON(w, map[string]string{"key": s.Push.PublicKey()})
+	})
+	mux.HandleFunc("POST /api/push/subscribe", func(w http.ResponseWriter, r *http.Request) {
+		var sub webpush.Subscription
+		if pushOff(w) || !readJSON(w, r, &sub) {
+			return
+		}
+		if err := s.Push.Subscribe(sub, identityFrom(r.Context())); err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/push/unsubscribe", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Endpoint string }
+		if pushOff(w) || !readJSON(w, r, &in) {
+			return
+		}
+		if err := s.Push.Unsubscribe(in.Endpoint); err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/push/test", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Endpoint string }
+		if pushOff(w) || !readJSON(w, r, &in) {
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		n := Notification{Title: "Clankstation", Body: "Notifications work on this device.", URL: "/#/settings", Tag: "test"}
+		if err := s.Push.Send(ctx, n, in.Endpoint); err != nil {
+			var ae *ActionError
+			if !errors.As(err, &ae) {
+				err = &ActionError{"The phone's push service didn't take it: " + err.Error()}
+			}
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /api/claude", func(w http.ResponseWriter, r *http.Request) {
 		st, err := claude.get(r.Context(), c)

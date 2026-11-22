@@ -147,8 +147,10 @@ add`; a failed clone shows git's message under "Details".
   (Paste, Esc, Tab, Ctrl, arrows, Enter) with **Paste** (iPhones offer no paste menu inside a terminal): it reads the
   clipboard, or opens a box to paste the sign-in code into.
   (Built in S3. Settings also links to Projects.)
-- **Notifications (S6):** on/off for this device, with a test button. On iPhone,
-  a note that notifications need the app installed to the home screen first.
+- **Notifications (S6, under "This device"):** Turn on / Turn off for this
+  device, and **Test** once on. On iPhone in Safari (not installed), a note
+  to add Clankstation to the home screen first, since iPhones only offer
+  notifications to installed web apps.
 - **Install the app:** instructions for this browser (Add to Home Screen /
   Install).
 - **The box (S7):** current version, **Check for updates**, **Update now**
@@ -180,8 +182,9 @@ Claude Code adapter (design section 6), not in the screens.
 
 ## 5. Notifications
 
-Sent when a turn ends, to every device of the task's user that turned them on.
-Tapping opens the task page.
+Sent when a turn ends, to every device that turned them on (one household
+user for now). Tapping opens the task page. A newer notification for the
+same task replaces the older one.
 
 | When | Title | Body |
 |---|---|---|
@@ -190,8 +193,7 @@ Tapping opens the task page.
 | Something went wrong | "Didn't finish: `<title>`" | "Tap to see what happened" |
 | Interrupted | "Interrupted: `<title>`" | "The box restarted. Tap to continue" |
 
-Nothing is sent for steps, for a task you stopped, or for a take-over you
-ended yourself.
+Nothing is sent for steps, for a task you stopped, or one taken out of line.
 
 ## 6. Flows
 

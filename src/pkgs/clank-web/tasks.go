@@ -38,6 +38,8 @@ type Store struct {
 	Running func() (map[string]bool, error)
 	// Invalidate drops cached container state (optional).
 	Invalidate func()
+	// Push sends notifications (S6); nil when it isn't set up.
+	Push *Push
 }
 
 func (s *Store) tasksDir() string { return filepath.Join(s.Data, "tasks") }
@@ -172,6 +174,8 @@ type TaskSummary struct {
 	Archived bool   `json:"archived"`
 	Created  string `json:"created"`
 	Finished string `json:"finished,omitempty"`
+	// Turns so far (prompts.log entries): a new one means a new reply.
+	Turns int `json:"turns_count"`
 	// One line for the card: the current step while working, the question
 	// when it needs an answer, else the summary's first sentence.
 	Activity string `json:"activity,omitempty"`
@@ -263,6 +267,7 @@ func (s *Store) summary(id, dir string, running bool) TaskDetail {
 			State:    state,
 			Archived: fileExists(filepath.Join(dir, "pruned")),
 			Created:  env["created"],
+			Turns:    len(turns),
 		},
 		Branch:   env["branch"],
 		Env:      env["env"],

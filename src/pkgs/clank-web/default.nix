@@ -40,7 +40,7 @@ buildGoModule {
     fileset = lib.fileset.fileFilter (f: f.hasExt "go" || f.name == "go.mod" || f.name == "go.sum") ./.;
   };
   # After changing go.mod or go.sum: set lib.fakeHash, build, copy the hash.
-  vendorHash = "sha256-LjM5B6PRL6rNAJ43+RBzKmRsPTNgE+TMeLkUfOVidqs=";
+  vendorHash = "sha256-Rjm+a+Ux4yKDgAlOmeaH8shZK9nfjK9SYloK2hAJzFM=";
   env.CGO_ENABLED = 0;
   preBuild = ''
     mkdir -p ui

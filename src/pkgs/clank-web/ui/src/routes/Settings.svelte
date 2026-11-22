@@ -1,5 +1,6 @@
 <script>
   import { getClaude, getMe } from '../lib/api.js';
+  import { pushSupport, currentSubscription, turnOn, turnOff, sendTest } from '../lib/push.js';
 
   let claude = $state(null);
   let error = $state('');
@@ -13,6 +14,54 @@
       .then((m) => (me = m))
       .catch(() => {});
   });
+
+  // Notifications on this device.
+  const support = pushSupport();
+  let pushOn = $state(null); // null while checking
+  let pushBusy = $state('');
+  let pushMsg = $state('');
+  let pushErr = $state('');
+
+  $effect(() => {
+    if (support !== 'ok') return;
+    currentSubscription()
+      .then((s) => (pushOn = Boolean(s) && Notification.permission === 'granted'))
+      .catch(() => (pushOn = false));
+  });
+
+  async function togglePush() {
+    pushErr = '';
+    pushMsg = '';
+    pushBusy = pushOn ? 'off' : 'on';
+    try {
+      if (pushOn) {
+        await turnOff();
+        pushOn = false;
+      } else {
+        await turnOn();
+        pushOn = true;
+        pushMsg = "You'll get a notification when a task is done or Claude has a question.";
+      }
+    } catch (e) {
+      pushErr = e.message;
+    } finally {
+      pushBusy = '';
+    }
+  }
+
+  async function testPush() {
+    pushErr = '';
+    pushMsg = '';
+    pushBusy = 'test';
+    try {
+      await sendTest();
+      pushMsg = 'Sent. It should show up in a few seconds.';
+    } catch (e) {
+      pushErr = e.message;
+    } finally {
+      pushBusy = '';
+    }
+  }
 
   const PLANS = { pro: 'Pro', max: 'Max', team: 'Team', enterprise: 'Enterprise' };
 </script>
@@ -78,6 +127,37 @@
     Signing in opens Claude's own sign-in in a terminal. The box passes your typing along and never
     sees, keeps or reads your password or sign-in.
   </p>
+
+  <h2 class="section-title">This device</h2>
+  <div class="card group">
+    {#if support === 'ios-install'}
+      <p class="row muted">To get notifications on iPhone, add Clankstation to your home screen
+        (Share, then Add to Home Screen) and open it from there.</p>
+    {:else if support !== 'ok'}
+      <p class="row muted">This browser can't show Clankstation's notifications.</p>
+    {:else}
+      <div class="row">
+        <span class="text">
+          <span class="label">Notifications</span>
+          <span class="muted small">When a task is done or Claude has a question</span>
+        </span>
+        <button class={`btn small ${pushOn ? '' : 'primary'}`} onclick={togglePush}
+          disabled={pushOn === null || !!pushBusy}>
+          {pushBusy === 'on' ? 'Turning on…' : pushBusy === 'off' ? 'Turning off…' : pushOn ? 'Turn off' : 'Turn on'}
+        </button>
+      </div>
+      {#if pushOn}
+        <div class="row">
+          <span class="label">Send a test notification</span>
+          <button class="btn small" onclick={testPush} disabled={!!pushBusy}>
+            {pushBusy === 'test' ? 'Sending…' : 'Test'}
+          </button>
+        </div>
+      {/if}
+    {/if}
+  </div>
+  {#if pushMsg}<p class="note small ok" role="status">{pushMsg}</p>{/if}
+  {#if pushErr}<p class="error-box note" role="alert">{pushErr}</p>{/if}
 
   <h2 class="section-title">The box</h2>
   <a class="card row link" href="#/projects">

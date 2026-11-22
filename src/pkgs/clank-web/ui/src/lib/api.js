@@ -87,3 +87,9 @@ export async function getClaude() {
 }
 
 export const getMe = () => getJSON('/api/me');
+
+// Notifications (S6).
+export const getPushKey = () => getJSON('/api/push/key');
+export const pushSubscribe = (sub) => postJSON('/api/push/subscribe', sub);
+export const pushUnsubscribe = (endpoint) => postJSON('/api/push/unsubscribe', { endpoint });
+export const pushTest = (endpoint) => postJSON('/api/push/test', { endpoint });

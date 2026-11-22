@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -52,8 +53,27 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	app := newServer(store, &Clankctl{Path: *clankctl, User: *user}, ui)
 	ts := NewTailscale(*tsSock)
+
+	// Push notifications (S6): the VAPID "sub" claim is the box's https
+	// address (push services want a way to reach whoever sends).
+	subject := func() string {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if st, err := ts.Status(ctx); err == nil && st.Name() != "" {
+			return "https://" + st.Name()
+		}
+		return "https://clankstation.local"
+	}
+	push, err := OpenPush(filepath.Join(*data, "settings", "push"), subject)
+	if err != nil {
+		log.Printf("clank-web: notifications are off: %v", err)
+	} else {
+		store.Push = push
+		go NewNotifier(store, push).Run(context.Background(), 3*time.Second)
+	}
+
+	app := newServer(store, &Clankctl{Path: *clankctl, User: *user}, ui)
 
 	errs := make(chan error, 3)
 	serve := func(name string, srv *http.Server, tls bool) {
